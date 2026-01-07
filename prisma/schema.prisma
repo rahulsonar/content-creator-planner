@@ -12,6 +12,17 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String   // Store hashed password (e.g., using bcrypt)
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+}
+
 model Task {
   id          String   @id @default(cuid())
   title       String
