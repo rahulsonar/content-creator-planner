@@ -1,11 +1,24 @@
 import { prisma } from '../lib/prisma';
+import bcrypt from 'bcrypt';
 
 async function main() {
   console.log('🌱 Starting seed...');
 
-  // Clear existing tasks
+  // Clear existing data
   await prisma.task.deleteMany({});
-  console.log('✨ Cleared existing tasks');
+  await prisma.user.deleteMany({});
+  console.log('✨ Cleared existing data');
+
+  // Create default user with hashed password
+  const hashedPassword = await bcrypt.hash('Admin123!', 12);
+  const defaultUser = await prisma.user.create({
+    data: {
+      email: 'admin@example.com',
+      password: hashedPassword,
+      name: 'Admin User',
+    },
+  });
+  console.log('👤 Created default user:', defaultUser.email);
 
   // Create YouTube content creator tasks
   const tasks = [
