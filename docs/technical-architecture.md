@@ -478,13 +478,22 @@ export async function POST(
   // Parse body
   const body = await request.json();
   const path = params.path.join('/');
+
+  // Ensure internal secret is configured
+  if (!INTERNAL_API_SECRET) {
+    console.error('INTERNAL_API_SECRET is not configured');
+    return NextResponse.json(
+      { error: 'Server misconfiguration' },
+      { status: 500 }
+    );
+  }
   
   // Forward to Python service
   const response = await fetch(`${PYTHON_AGENT_URL}/${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Internal-Secret': INTERNAL_API_SECRET!,
+      'X-Internal-Secret': INTERNAL_API_SECRET,
       'X-User-Id': payload.userId,
       'X-User-Email': payload.email,
     },
