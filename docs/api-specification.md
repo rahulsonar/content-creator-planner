@@ -1179,11 +1179,16 @@ AND user_id = $2;
 
 **Get tasks with dependencies:**
 ```sql
-SELECT t1.*, 
-  (SELECT json_agg(t2.*) FROM tasks t2 
-   WHERE t2.id = ANY(t1.depends_on)) AS dependencies
+SELECT
+  t1.*,
+  json_agg(t2.*) AS dependencies
 FROM tasks t1
-WHERE t1.user_id = $1;
+LEFT JOIN task_dependencies td
+  ON td.task_id = t1.id
+LEFT JOIN tasks t2
+  ON t2.id = td.dependency_id
+WHERE t1.user_id = $1
+GROUP BY t1.id;
 ```
 
 ### C. OpenAPI Specification
