@@ -157,11 +157,14 @@ User Browser ←→ Next.js (Socket.io) ←→ Python FastAPI (WebSocket)
 ```
 
 **Flow:**
-1. User connects WebSocket to Next.js server
-2. Next.js authenticates user via JWT
-3. Next.js opens WebSocket to Python service
-4. Python streams LLM tokens back through Next.js to user
-5. Next.js saves complete message to database after stream ends
+1. User requests WebSocket token from /api/auth/ws-token (authenticated via cookie)
+2. Server issues short-lived token (5 min, scoped to WebSocket only)
+3. User connects WebSocket with token as query parameter
+4. Next.js validates WebSocket token and upgrades connection
+5. Next.js opens WebSocket to Python service with user context
+6. Python streams LLM tokens back through Next.js to user
+7. Next.js saves complete message to database after stream ends
+8. WebSocket token expires automatically (cannot be reused for API calls)
 
 ---
 
@@ -182,7 +185,7 @@ model UserContext {
 
 **Unstructured Summary (Files):**
 ```
-user_context/
+{project_root}/agent_context/
   {userId}/
     context.md         # Main context file for AI consumption
     onboarding.json    # Raw conversation backup
@@ -260,7 +263,7 @@ model User {
   userContext           UserContext?
 }
 
-// Existing Task model - ADD these fields
+// Existing Task model - ADD these fields. We will add migration for TaskPriority
 model Task {
   id                    String   @id @default(uuid())
   title                 String
@@ -274,7 +277,7 @@ model Task {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   
-  // Hierarchical structure (existing)
+  // Hierarchical structure (single-level only: tasks can have subtasks, but subtasks cannot have children)
   parentId              String?
   parent                Task?    @relation("TaskHierarchy", fields: [parentId], references: [id])
   subtasks              Task[]   @relation("TaskHierarchy")
@@ -595,28 +598,37 @@ async def health_check():
 
 ### 6.1 Authentication Flow
 
+**SECURITY NOTE:** We use HttpOnly cookies exclusively to prevent XSS attacks. Short-lived WebSocket tokens are issued on-demand to avoid localStorage exposure.
+
 ```
 1. User logs in → Next.js /api/auth/login
    ↓
 2. Next.js verifies password → generates JWT
    ↓
-3. JWT stored in:
-   - HTTP-only cookie (server-side requests)
-   - localStorage (client-side WebSocket)
+3. JWT stored in HttpOnly cookie ONLY (NOT localStorage)
+   - HttpOnly: true (prevents JavaScript access)
+   - Secure: true (HTTPS only in production)
+   - SameSite: 'lax' (CSRF protection)
    ↓
-4. User makes request to /api/agent/*
+4. For WebSocket connections:
+   a. Client requests /api/auth/ws-token (with cookie)
+   b. Server issues short-lived token (5 min expiry)
+   c. Client uses token for WebSocket auth ONLY
+   d. WebSocket token cannot access other APIs
    ↓
-5. Next.js middleware verifies JWT
+5. User makes request to /api/agent/*
    ↓
-6. Next.js extracts userId from JWT
+6. Next.js middleware verifies JWT from cookie
    ↓
-7. Next.js forwards to Python with headers:
+7. Next.js extracts userId from JWT
+   ↓
+8. Next.js forwards to Python with headers:
    - X-Internal-Secret: <shared secret>
    - X-User-Id: <uuid>
    ↓
-8. Python verifies X-Internal-Secret
+9. Python verifies X-Internal-Secret
    ↓
-9. Python uses X-User-Id for DB queries (trusts Next.js)
+10. Python uses X-User-Id for DB queries (trusts Next.js)
 ```
 
 ### 6.2 Service-to-Service Authentication
@@ -690,7 +702,7 @@ services:
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - ENVIRONMENT=development
     volumes:
-      - ./user_context:/app/user_context
+      - ./agent_context:/app/agent_context
       - ./python-agents:/app  # Hot reload
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
   

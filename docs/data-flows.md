@@ -129,7 +129,8 @@ This document details the data flows for all major user interactions with the AI
      │                            │                              │                          │
      │                            │                              │  19. Generate context.md │
      │                            │                              │      file                │
-     │                            │                              │      /user_context/      │
+     │                            │                              │      {project_root}/     │
+     │                            │                              │      agent_context/      │
      │                            │                              │      {userId}/           │
      │                            │                              │      context.md          │
      │                            │                              │                          │
@@ -459,27 +460,28 @@ Task E: { id: "e", dueDate: "Day 13", dependsOn: ["c", "d"] }
 **Algorithm (Python Agent):**
 ```python
 def calculate_due_dates(tasks: List[Task], start_date: datetime) -> List[Task]:
-    """Calculate due dates respecting dependencies"""
+    """
+    Calculate due dates respecting dependencies.
+    Note: Tasks follow single-level hierarchy - subtasks cannot have their own subtasks.
+    """
     task_map = {t.id: t for t in tasks}
     completion_dates = {}
-    
-    def get_earliest_start(task_id: str) -> datetime:
-        task = task_map[task_id]
-        if not task.depends_on:
-            return start_date
-        
-        # Wait for all dependencies to complete
-        dep_completion_dates = [
-            completion_dates[dep_id] 
-            for dep_id in task.depends_on
-        ]
-        return max(dep_completion_dates)
     
     # Process tasks in dependency order (topological sort)
     sorted_tasks = topological_sort(tasks)
     
     for task in sorted_tasks:
-        earliest_start = get_earliest_start(task.id)
+        # Calculate earliest start based on dependencies
+        if not task.depends_on:
+            earliest_start = start_date
+        else:
+            # All dependencies are guaranteed to be in completion_dates due to topological sort
+            dep_completion_dates = [
+                completion_dates[dep_id] 
+                for dep_id in task.depends_on
+            ]
+            earliest_start = max(dep_completion_dates)
+        
         duration = timedelta(hours=task.estimated_hours)
         task.due_date = earliest_start + duration
         completion_dates[task.id] = task.due_date
@@ -703,7 +705,7 @@ Python Agent Process:
    """
    ↓
 4. Save to filesystem:
-   /user_context/{user_id}/context.md
+   {project_root}/agent_context/{user_id}/context.md
    ↓
 5. Update UserContext in database:
    INSERT INTO user_context (
@@ -843,6 +845,50 @@ Next.js API Flow:
 7. FOR EACH dependent_task:
    → Check if ALL dependencies are complete
    → IF yes: Send notification "Task X is now available"
+```
+
+### 10.2 Task Hierarchy Validation
+
+**Rule: Single-level hierarchy only - subtasks cannot have children**
+
+```
+Creating a New Task:
+
+Next.js API Flow:
+1. POST /api/tasks
+   { title, parentId?, ... }
+   ↓
+2. IF parentId is provided:
+   → Load parent task:
+     parent = prisma.task.findUnique({
+       where: { id: parentId },
+       select: { parentId: true }
+     })
+   ↓
+3. Validate hierarchy:
+   IF parent.parentId !== null:
+   → Return 400 Bad Request: 
+     "Cannot create subtask - parent is already a subtask. 
+      Only one level of nesting is allowed."
+   ↓
+4. ELSE:
+   → Proceed with task creation
+   → prisma.task.create({
+       data: { title, parentId, ... }
+     })
+```
+
+**Example Validation:**
+```typescript
+// Valid: Top-level task with subtasks
+Task A (parentId: null)
+  ├─ Subtask B (parentId: A.id) ✓ Allowed
+  └─ Subtask C (parentId: A.id) ✓ Allowed
+
+// Invalid: Subtask trying to have children
+Task A (parentId: null)
+  └─ Subtask B (parentId: A.id)
+      └─ Subtask C (parentId: B.id) ✗ BLOCKED
 ```
 
 ---

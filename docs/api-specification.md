@@ -381,7 +381,7 @@ Delete a task.
   "isTeam": false,
   "uploadFrequency": "weekly",
   "contentGoals": "Teach Python to beginners, grow to 50k subs",
-  "contextFilePath": "/user_context/{userId}/context.md",
+  "contextFilePath": "{project_root}/agent_context/{userId}/context.md",
   "updatedAt": "2026-01-07T09:15:00Z"
 }
 ```
@@ -499,7 +499,7 @@ Send message in onboarding conversation.
   "step": "completed",
   "completed": true,
   "summary": "Tech YouTuber focusing on Python tutorials, 5k subscribers, uploads weekly...",
-  "contextPath": "/user_context/{userId}/context.md"
+  "contextPath": "{project_root}/agent_context/{userId}/context.md"
 }
 ```
 

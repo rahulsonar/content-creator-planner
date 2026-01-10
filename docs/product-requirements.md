@@ -70,7 +70,7 @@ Replace traditional signup forms with a guided conversation that collects:
 **Technical Notes:**
 - Uses OpenAI GPT-4 for natural language understanding
 - Stores conversation history in Conversation model
-- Generates user_context/{userId}/context.md file
+- Generates {project_root}/agent_context/{userId}/context.md file
 
 ---
 
@@ -95,7 +95,7 @@ AI agent that analyzes user context and generates detailed content plans with ta
 - [ ] User can approve/reject plan before committing to database
 
 **Technical Notes:**
-- Loads user_context/{userId}/context.md for personalization
+- Loads {project_root}/agent_context/{userId}/context.md for personalization
 - Uses Claude 3.5 for complex reasoning tasks
 - Returns structured JSON for task creation
 
@@ -122,7 +122,7 @@ In-house AI agent that replaces the need for users to switch to ChatGPT or Claud
 - [ ] Context switching between planning and creative modes seamlessly
 
 **Technical Notes:**
-- Uses user_context/{userId}/context.md and task history for personalization
+- Uses {project_root}/agent_context/{userId}/context.md and task history for personalization
 - Tool integration allows direct database operations (task creation, updates)
 - Supports multi-turn conversations with memory of previous creative sessions
 

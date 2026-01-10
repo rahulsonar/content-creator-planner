@@ -219,7 +219,7 @@ services:
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       - ENVIRONMENT=development
     volumes:
-      - ./user_context:/app/user_context
+      - ./agent_context:/app/agent_context
       - ./python-agents:/app
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
@@ -417,7 +417,7 @@ from pathlib import Path
 from typing import Dict
 
 class UserContextManager:
-    def __init__(self, base_path: str = '/app/user_context'):
+    def __init__(self, base_path: str = '/app/agent_context'):
         self.base_path = Path(base_path)
     
     async def create_context_file(
