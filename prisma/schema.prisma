@@ -39,6 +39,15 @@ model Task {
   parent      Task?    @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
   subtasks    Task[]   @relation("TaskHierarchy")
   
+  // Task dependencies
+  dependsOn   TaskDependency[] @relation("DependentTask")
+  blockedBy   TaskDependency[] @relation("BlockingTask")
+  
+  // AI-related fields
+  aiGenerated Boolean  @default(false)
+  aiSuggestions String? @db.Text
+  aiContext   String?  @db.Text
+  
   // Metadata
   tags        String[]
   assignedTo  String?
@@ -51,6 +60,56 @@ model Task {
   @@index([parentId])
   @@index([status])
   @@index([dueDate])
+}
+
+model TaskDependency {
+  id            String   @id @default(cuid())
+  dependentId   String
+  blockingId    String
+  dependencyType DependencyType @default(FINISH_TO_START)
+  
+  dependent     Task     @relation("DependentTask", fields: [dependentId], references: [id], onDelete: Cascade)
+  blocking      Task     @relation("BlockingTask", fields: [blockingId], references: [id], onDelete: Cascade)
+  
+  createdAt     DateTime @default(now())
+  
+  @@unique([dependentId, blockingId])
+  @@index([dependentId])
+  @@index([blockingId])
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String?
+  messages  Json     // Array of {role: 'user'|'assistant', content: string, timestamp: DateTime}
+  metadata  Json?    // Additional context like referenced tasks, files, etc.
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model UserContext {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  preferences Json?    // User preferences, settings, theme, etc.
+  workspace   Json?    // Current workspace state, open files, etc.
+  aiSettings  Json?    // AI behavior preferences, model settings, etc.
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  
+}
+
+enum DependencyType {
+  FINISH_TO_START
+  START_TO_START
+  FINISH_TO_FINISH
+  START_TO_FINISH
 }
 
 enum TaskStatus {
