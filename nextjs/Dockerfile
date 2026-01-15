@@ -4,7 +4,7 @@ FROM node:20-alpine AS development
 WORKDIR /app
 
 # Install dependencies will happen at runtime
-EXPOSE 3000
+EXPOSE 3000 5555
 
 # Create startup script
 RUN echo '#!/bin/sh' > /start.sh && \
@@ -14,6 +14,10 @@ RUN echo '#!/bin/sh' > /start.sh && \
     echo '  npm install' >> /start.sh && \
     echo '  touch node_modules/.installed' >> /start.sh && \
     echo 'fi' >> /start.sh && \
+    echo 'echo "Generating Prisma Client..."' >> /start.sh && \
+    echo 'npx prisma generate' >> /start.sh && \
+    echo 'echo "Starting Prisma Studio..."' >> /start.sh && \
+    echo 'npm run studio &' >> /start.sh && \
     echo 'echo "Starting development server..."' >> /start.sh && \
     echo 'exec npm run dev' >> /start.sh && \
     chmod +x /start.sh
