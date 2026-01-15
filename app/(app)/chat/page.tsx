@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface Message {
   id: number;
@@ -19,9 +19,15 @@ export default function ChatPage() {
     },
   ]);
   const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
 
     const userMessage: Message = {
       id: messages.length + 1,
@@ -32,17 +38,52 @@ export default function ChatPage() {
 
     setMessages([...messages, userMessage]);
     setInput('');
+    setIsLoading(true);
 
-    // Simulate AI response after a short delay
-    setTimeout(() => {
+    try {
+      // Call the OpenAI API through our backend
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [...messages, userMessage].map(msg => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to get response');
+      }
+
+      const data = await response.json();
+
       const aiMessage: Message = {
         id: messages.length + 2,
         role: 'assistant',
-        content: 'This is a dummy response. The AI functionality will be implemented soon!',
+        content: data.content,
         timestamp: new Date(),
       };
+
       setMessages(prev => [...prev, aiMessage]);
-    }, 1000);
+    } catch (error: any) {
+      console.error('Chat error:', error);
+      
+      const errorMessage: Message = {
+        id: messages.length + 2,
+        role: 'assistant',
+        content: `Sorry, I encountered an error: ${error.message}. Please make sure the OpenAI API key is configured.`,
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -83,7 +124,7 @@ export default function ChatPage() {
                 <div className="flex-1">
                   <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                   <p className={`text-xs mt-2 ${message.role === 'user' ? 'text-blue-100' : 'text-gray-500'}`}>
-                    {message.timestamp.toLocaleTimeString()}
+                    {mounted ? message.timestamp.toLocaleTimeString() : ''}
                   </p>
                 </div>
               </div>
@@ -101,7 +142,7 @@ export default function ChatPage() {
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Ask about content strategy, video ideas, scheduling..."
-              className="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder:text-gray-500 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               rows={3}
             />
             <button

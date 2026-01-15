@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma';
+import { TaskStatus, Priority } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
 async function main() {
@@ -26,8 +27,8 @@ async function main() {
     {
       title: 'Plan Q1 2026 Content Calendar',
       description: 'Create detailed content calendar for first quarter including trending topics, SEO keywords, and upload schedule',
-      status: 'IN_PROGRESS',
-      priority: 'HIGH',
+      status: TaskStatus.IN_PROGRESS,
+      priority: Priority.HIGH,
       startDate: new Date('2026-01-05'),
       dueDate: new Date('2026-01-15'),
       tags: ['planning', 'content-strategy', 'Q1'],
@@ -37,8 +38,8 @@ async function main() {
     {
       title: 'Film "Top 10 AI Tools for Creators" Video',
       description: 'Research, script, and film comprehensive review of AI tools. Include demos and real-world examples.',
-      status: 'TODO',
-      priority: 'HIGH',
+      status: TaskStatus.TODO,
+      priority: Priority.HIGH,
       startDate: new Date('2026-01-10'),
       dueDate: new Date('2026-01-12'),
       tags: ['video-production', 'AI', 'tutorial'],
@@ -47,8 +48,8 @@ async function main() {
     {
       title: 'Edit Weekly Vlog',
       description: 'Edit last week\'s vlog footage. Add music, transitions, and color grading. Target: 15-minute runtime.',
-      status: 'IN_PROGRESS',
-      priority: 'URGENT',
+      status: TaskStatus.IN_PROGRESS,
+      priority: Priority.URGENT,
       startDate: new Date('2026-01-06'),
       dueDate: new Date('2026-01-08'),
       tags: ['editing', 'vlog', 'weekly-content'],
@@ -58,8 +59,8 @@ async function main() {
     {
       title: 'Create Thumbnails for 3 Upcoming Videos',
       description: 'Design eye-catching thumbnails for: AI Tools video, Weekly Vlog, and Gear Review. A/B test variations.',
-      status: 'TODO',
-      priority: 'MEDIUM',
+      status: TaskStatus.TODO,
+      priority: Priority.MEDIUM,
       dueDate: new Date('2026-01-11'),
       tags: ['design', 'thumbnails', 'branding'],
       estimatedHours: 4,
@@ -67,8 +68,8 @@ async function main() {
     {
       title: 'Write Script: "My YouTube Journey - 1 Year Later"',
       description: 'Write emotional and data-driven script about channel growth. Include stats, lessons learned, and future plans.',
-      status: 'COMPLETED',
-      priority: 'MEDIUM',
+      status: TaskStatus.COMPLETED,
+      priority: Priority.MEDIUM,
       startDate: new Date('2026-01-01'),
       dueDate: new Date('2026-01-05'),
       completedAt: new Date('2026-01-04'),
@@ -81,8 +82,8 @@ async function main() {
     {
       title: 'Optimize Last 5 Videos for SEO',
       description: 'Update titles, descriptions, and tags based on YouTube Analytics. Add chapters and improved keywords.',
-      status: 'TODO',
-      priority: 'MEDIUM',
+      status: TaskStatus.TODO,
+      priority: Priority.MEDIUM,
       dueDate: new Date('2026-01-20'),
       tags: ['SEO', 'optimization', 'analytics'],
       estimatedHours: 3,
@@ -90,8 +91,8 @@ async function main() {
     {
       title: 'Research Trending Topics in Creator Niche',
       description: 'Use Google Trends, VidIQ, and TubeBuddy to identify trending topics. Document top 20 ideas for next month.',
-      status: 'IN_PROGRESS',
-      priority: 'HIGH',
+      status: TaskStatus.IN_PROGRESS,
+      priority: Priority.HIGH,
       startDate: new Date('2026-01-07'),
       dueDate: new Date('2026-01-09'),
       tags: ['research', 'trends', 'content-ideas'],
@@ -101,8 +102,8 @@ async function main() {
     {
       title: 'Collab Outreach: Email 10 Creators',
       description: 'Reach out to creators with similar audience size for potential collaborations. Personalize each email.',
-      status: 'TODO',
-      priority: 'LOW',
+      status: TaskStatus.TODO,
+      priority: Priority.LOW,
       dueDate: new Date('2026-01-25'),
       tags: ['networking', 'collaboration', 'outreach'],
       estimatedHours: 2,
@@ -110,8 +111,8 @@ async function main() {
     {
       title: 'Create Instagram Reels from Latest Video',
       description: 'Repurpose best moments from latest video into 3-5 Instagram Reels. Optimize for 9:16 format.',
-      status: 'TODO',
-      priority: 'MEDIUM',
+      status: TaskStatus.TODO,
+      priority: Priority.MEDIUM,
       dueDate: new Date('2026-01-14'),
       tags: ['social-media', 'repurposing', 'instagram'],
       estimatedHours: 2,
@@ -121,8 +122,8 @@ async function main() {
     {
       title: 'Review New Sony Camera for Channel',
       description: 'Test Sony A7 IV for video quality. Create detailed review video with sample footage and comparisons.',
-      status: 'BLOCKED',
-      priority: 'MEDIUM',
+      status: TaskStatus.BLOCKED,
+      priority: Priority.MEDIUM,
       dueDate: new Date('2026-01-30'),
       tags: ['gear-review', 'camera', 'sponsored'],
       estimatedHours: 10,
@@ -130,8 +131,8 @@ async function main() {
     {
       title: 'Upgrade Studio Lighting Setup',
       description: 'Install new key light and backlight. Test different configurations and document settings.',
-      status: 'TODO',
-      priority: 'LOW',
+      status: TaskStatus.TODO,
+      priority: Priority.LOW,
       dueDate: new Date('2026-01-31'),
       tags: ['studio', 'lighting', 'production-quality'],
       estimatedHours: 5,
@@ -139,8 +140,8 @@ async function main() {
     {
       title: 'Backup All Video Projects to Cloud',
       description: 'Upload December 2025 projects to Google Drive and external SSD. Verify integrity of backups.',
-      status: 'COMPLETED',
-      priority: 'HIGH',
+      status: TaskStatus.COMPLETED,
+      priority: Priority.HIGH,
       startDate: new Date('2026-01-03'),
       dueDate: new Date('2026-01-05'),
       completedAt: new Date('2026-01-05'),
@@ -153,8 +154,8 @@ async function main() {
     {
       title: 'Respond to Comments on Last 3 Videos',
       description: 'Engage with community by responding to comments. Prioritize questions and thoughtful feedback.',
-      status: 'IN_PROGRESS',
-      priority: 'MEDIUM',
+      status: TaskStatus.IN_PROGRESS,
+      priority: Priority.MEDIUM,
       startDate: new Date('2026-01-07'),
       dueDate: new Date('2026-01-08'),
       tags: ['community', 'engagement', 'comments'],
@@ -164,8 +165,8 @@ async function main() {
     {
       title: 'Plan Live Stream: Q&A Session',
       description: 'Organize live Q&A stream. Create announcement, prepare topics, and test streaming setup.',
-      status: 'TODO',
-      priority: 'MEDIUM',
+      status: TaskStatus.TODO,
+      priority: Priority.MEDIUM,
       dueDate: new Date('2026-01-18'),
       tags: ['livestream', 'community', 'QA'],
       estimatedHours: 6,
@@ -173,8 +174,8 @@ async function main() {
     {
       title: 'Update Channel Banner & About Section',
       description: 'Refresh channel art to reflect new branding. Update about section with recent achievements and contact info.',
-      status: 'TODO',
-      priority: 'LOW',
+      status: TaskStatus.TODO,
+      priority: Priority.LOW,
       dueDate: new Date('2026-02-01'),
       tags: ['branding', 'channel-optimization', 'design'],
       estimatedHours: 2,
@@ -184,8 +185,8 @@ async function main() {
     {
       title: 'Review December Analytics Report',
       description: 'Analyze December performance: views, watch time, CTR, subscriber growth. Identify what worked and what didn\'t.',
-      status: 'COMPLETED',
-      priority: 'HIGH',
+      status: TaskStatus.COMPLETED,
+      priority: Priority.HIGH,
       startDate: new Date('2026-01-01'),
       dueDate: new Date('2026-01-03'),
       completedAt: new Date('2026-01-02'),
@@ -196,8 +197,8 @@ async function main() {
     {
       title: 'Negotiate Brand Deal with TechCorp',
       description: 'Review contract terms for sponsored content. Negotiate rates and deliverables. Ensure FTC compliance.',
-      status: 'REVIEW',
-      priority: 'HIGH',
+      status: TaskStatus.REVIEW,
+      priority: Priority.HIGH,
       dueDate: new Date('2026-01-12'),
       tags: ['sponsorship', 'business', 'legal'],
       estimatedHours: 4,
@@ -205,8 +206,8 @@ async function main() {
     {
       title: 'Organize Receipts for Tax Season',
       description: 'Collect and categorize all business expenses from 2025. Prepare documents for accountant.',
-      status: 'IN_PROGRESS',
-      priority: 'HIGH',
+      status: TaskStatus.IN_PROGRESS,
+      priority: Priority.HIGH,
       startDate: new Date('2026-01-05'),
       dueDate: new Date('2026-01-31'),
       tags: ['taxes', 'admin', 'finance'],
@@ -229,8 +230,8 @@ async function main() {
     data: {
       title: 'Complete "Ultimate Productivity Setup" Video Project',
       description: 'End-to-end production of comprehensive productivity video',
-      status: 'IN_PROGRESS',
-      priority: 'URGENT',
+      status: TaskStatus.IN_PROGRESS,
+      priority: Priority.URGENT,
       startDate: new Date('2026-01-08'),
       dueDate: new Date('2026-01-15'),
       tags: ['video-project', 'productivity', 'tutorial'],
@@ -243,8 +244,8 @@ async function main() {
     {
       title: 'Research productivity tools and workflows',
       description: 'Compile list of 15-20 productivity tools and techniques',
-      status: 'COMPLETED',
-      priority: 'HIGH',
+      status: TaskStatus.COMPLETED,
+      priority: Priority.HIGH,
       parentId: mainTask.id,
       completedAt: new Date('2026-01-08'),
       tags: ['research', 'subtask'],
@@ -254,8 +255,8 @@ async function main() {
     {
       title: 'Write and revise script',
       description: 'Draft script with intro, main content, and call-to-action',
-      status: 'COMPLETED',
-      priority: 'HIGH',
+      status: TaskStatus.COMPLETED,
+      priority: Priority.HIGH,
       parentId: mainTask.id,
       completedAt: new Date('2026-01-09'),
       tags: ['scriptwriting', 'subtask'],
@@ -265,8 +266,8 @@ async function main() {
     {
       title: 'Film A-roll and B-roll footage',
       description: 'Record talking head segments and screen recordings',
-      status: 'IN_PROGRESS',
-      priority: 'HIGH',
+      status: TaskStatus.IN_PROGRESS,
+      priority: Priority.HIGH,
       parentId: mainTask.id,
       tags: ['filming', 'subtask'],
       estimatedHours: 8,
@@ -274,8 +275,8 @@ async function main() {
     {
       title: 'Edit video in Premiere Pro',
       description: 'Complete edit with transitions, effects, and color grading',
-      status: 'TODO',
-      priority: 'HIGH',
+      status: TaskStatus.TODO,
+      priority: Priority.HIGH,
       parentId: mainTask.id,
       tags: ['editing', 'subtask'],
       estimatedHours: 10,
@@ -283,8 +284,8 @@ async function main() {
     {
       title: 'Create custom thumbnail',
       description: 'Design thumbnail with attention-grabbing text and imagery',
-      status: 'TODO',
-      priority: 'MEDIUM',
+      status: TaskStatus.TODO,
+      priority: Priority.MEDIUM,
       parentId: mainTask.id,
       tags: ['design', 'subtask'],
       estimatedHours: 2,

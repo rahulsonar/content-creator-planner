@@ -23,12 +23,12 @@
 │              (React, TypeScript, Tailwind)                   │
 │                                                              │
 │  • Task Management UI                                        │
-│  • Chat Interface (WebSocket client)                         │
+│  • Chat Interface (HTTP client)                              │
 │  • Kanban Board                                              │
 │  • Calendar View                                             │
 └─────────────────┬───────────────────────────────────────────┘
                   │
-                  ↓ HTTP/REST + WebSocket
+                  ↓ HTTP/REST
 ┌─────────────────────────────────────────────────────────────┐
 │                    Next.js Backend                           │
 │               (Node.js 18, TypeScript)                       │
@@ -37,7 +37,6 @@
 │  • Task CRUD Operations                                      │
 │  • User Management                                           │
 │  • Proxy to Python Agent Service                            │
-│  • WebSocket Server (Socket.io)                             │
 └─────────┬───────────────────────────────┬───────────────────┘
           │                               │
           ↓                               ↓
@@ -48,7 +47,7 @@
     │  • Users    │←─────────│  • Onboarding Agent            │
     │  • Tasks    │          │  • Planning Agent              │
     │  • Convos   │          │  • Model Orchestrator          │
-    │  • Context  │          │  • WebSocket Handler           │
+    │  • Context  │          │  • HTTP API Routes             │
     └─────────────┘          └────────────┬───────────────────┘
                                           │
                                           ↓ HTTPS API Calls
@@ -75,7 +74,7 @@
 | **Database** | PostgreSQL | 15 | Primary data store |
 | **Auth** | JWT (jsonwebtoken) | Latest | Token-based authentication |
 | **Styling** | Tailwind CSS | 4.x | Utility-first CSS |
-| **WebSocket** | Socket.io | 4.x | Real-time bidirectional communication |
+
 | **HTTP Client** | Fetch API | Native | Service-to-service calls |
 
 ### 2.2 Python Agent Service (New)
@@ -87,7 +86,7 @@
 | **ASGI Server** | Uvicorn | Latest | Production server |
 | **LLM SDK** | OpenAI Python SDK | 1.12+ | OpenAI API client |
 | **LLM SDK** | Anthropic SDK | 0.18+ | Claude API client |
-| **WebSocket** | FastAPI WebSocket | Built-in | Real-time streaming |
+
 | **Validation** | Pydantic | 2.x | Data validation |
 | **ORM** | SQLAlchemy (optional) | 2.x | Direct DB access if needed |
 | **HTTP Client** | httpx | Latest | Async HTTP requests |
@@ -141,30 +140,30 @@
 
 ---
 
-### 3.3 Real-Time Communication Strategy
+### 3.3 Communication Strategy
 
-**Decision:** WebSocket with streaming responses
+**Decision:** HTTP POST with JSON responses
 
 **Rationale:**
-1. **User Expectation:** Modern AI interfaces (ChatGPT, Claude) stream responses
-2. **Perceived Performance:** Users see first token in ~1-2 seconds vs waiting 10+ seconds
-3. **Engagement:** Streaming creates sense of AI "thinking" which builds trust
-4. **Mobile Support:** WebSocket works well on mobile with reconnection logic
+1. **Simplicity:** Standard HTTP requests are easier to debug and maintain
+2. **Compatibility:** Works everywhere without WebSocket infrastructure
+3. **Reliability:** HTTP has better error handling and retry mechanisms
+4. **Caching:** HTTP responses can be cached if needed
+5. **Mobile Support:** Better compatibility with mobile networks and proxies
 
 **Implementation Approach:**
 ```
-User Browser ←→ Next.js (Socket.io) ←→ Python FastAPI (WebSocket)
+User Browser ←→ Next.js API Routes ←→ Python FastAPI (HTTP)
 ```
 
 **Flow:**
-1. User requests WebSocket token from /api/auth/ws-token (authenticated via cookie)
-2. Server issues short-lived token (5 min, scoped to WebSocket only)
-3. User connects WebSocket with token as query parameter
-4. Next.js validates WebSocket token and upgrades connection
-5. Next.js opens WebSocket to Python service with user context
-6. Python streams LLM tokens back through Next.js to user
-7. Next.js saves complete message to database after stream ends
-8. WebSocket token expires automatically (cannot be reused for API calls)
+1. User sends message via HTTP POST to Next.js API route
+2. Next.js authenticates user via JWT from cookie
+3. Next.js proxies request to Python service with user context
+4. Python agent processes request and returns complete response
+5. Next.js saves message and response to database
+6. Next.js returns response to user
+7. Frontend displays the complete message
 
 ---
 
@@ -541,7 +540,6 @@ python-agents/
 ├── api/
 │   ├── __init__.py
 │   ├── routes.py               # FastAPI route definitions
-│   ├── websocket.py            # WebSocket endpoint
 │   └── middleware.py           # Auth middleware
 ├── storage/
 │   ├── __init__.py
@@ -563,7 +561,6 @@ python-agents/
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import router
-from api.websocket import websocket_endpoint
 from config.settings import settings
 
 app = FastAPI(
@@ -584,9 +581,6 @@ app.add_middleware(
 # Routes
 app.include_router(router, prefix="/api")
 
-# WebSocket
-app.add_websocket_route("/ws", websocket_endpoint)
-
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "python-agent"}
@@ -598,7 +592,7 @@ async def health_check():
 
 ### 6.1 Authentication Flow
 
-**SECURITY NOTE:** We use HttpOnly cookies exclusively to prevent XSS attacks. Short-lived WebSocket tokens are issued on-demand to avoid localStorage exposure.
+**SECURITY NOTE:** We use HttpOnly cookies exclusively to prevent XSS attacks.
 
 ```
 1. User logs in → Next.js /api/auth/login
@@ -610,25 +604,19 @@ async def health_check():
    - Secure: true (HTTPS only in production)
    - SameSite: 'lax' (CSRF protection)
    ↓
-4. For WebSocket connections:
-   a. Client requests /api/auth/ws-token (with cookie)
-   b. Server issues short-lived token (5 min expiry)
-   c. Client uses token for WebSocket auth ONLY
-   d. WebSocket token cannot access other APIs
+4. User makes request to /api/agent/*
    ↓
-5. User makes request to /api/agent/*
+5. Next.js middleware verifies JWT from cookie
    ↓
-6. Next.js middleware verifies JWT from cookie
+6. Next.js extracts userId from JWT
    ↓
-7. Next.js extracts userId from JWT
-   ↓
-8. Next.js forwards to Python with headers:
+7. Next.js forwards to Python with headers:
    - X-Internal-Secret: <shared secret>
    - X-User-Id: <uuid>
    ↓
-9. Python verifies X-Internal-Secret
+8. Python verifies X-Internal-Secret
    ↓
-10. Python uses X-User-Id for DB queries (trusts Next.js)
+9. Python uses X-User-Id for DB queries (trusts Next.js)
 ```
 
 ### 6.2 Service-to-Service Authentication
@@ -775,7 +763,7 @@ logger.addHandler(handler)
 | LLM API latency | Histogram | Detect slow responses |
 | Token usage per user | Counter | Cost tracking |
 | Conversation completion rate | Gauge | Product success |
-| WebSocket connections | Gauge | Concurrent load |
+| HTTP request rate | Counter | API usage tracking |
 | Error rate by endpoint | Counter | Service health |
 | Database query time | Histogram | Performance tuning |
 
@@ -793,7 +781,7 @@ logger.addHandler(handler)
 
 ### 9.3 E2E Tests
 - Playwright for full onboarding flow
-- Test WebSocket streaming
+- Test API communication and response handling
 
 ---
 
@@ -826,7 +814,7 @@ logger.addHandler(handler)
 |----------|-------------|----------------|
 | Python service | Next.js API routes with AI SDK | Limited Python AI library support |
 | FastAPI | Flask | Lack of native async, no auto OpenAPI docs |
-| WebSocket | Server-Sent Events (SSE) | SSE is unidirectional, harder on mobile |
+| HTTP POST | Server-Sent Events (SSE) | SSE is unidirectional, harder on mobile |
 | PostgreSQL | MongoDB | Need relational structure, ACID guarantees |
 | Docker Compose | Kubernetes | Overkill for initial deployment |
 
@@ -856,5 +844,5 @@ LOG_LEVEL=INFO
 |----------|-----|-----|-----|
 | /api/agent/onboarding/start | 500ms | 1s | 2s |
 | /api/agent/planning/generate | 3s | 8s | 15s |
-| WebSocket first token | 1s | 2s | 3s |
+| /api/agent/chat | 1s | 3s | 5s |
 | Task CRUD | 100ms | 200ms | 500ms |
