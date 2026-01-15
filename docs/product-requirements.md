@@ -183,29 +183,29 @@ Intelligent routing layer that selects optimal LLM model based on task complexit
 
 ---
 
-### 3.6 Real-Time Chat Interface
+### 3.6 Chat Interface
 
 **Priority:** P0 (Must Have)
 
 **Description:**  
-WebSocket-based chat UI with streaming responses from AI agents.
+HTTP-based chat UI for AI agent interactions.
 
 **User Stories:**
-- As a user, I want to see AI's response appear word-by-word like ChatGPT
+- As a user, I want to send messages to the AI and receive responses
 - As a mobile user, I want chat to work on small screens
 - As a returning user, I want to see my conversation history
 
 **Acceptance Criteria:**
-- [ ] Responses stream in real-time (no waiting for full response)
+- [ ] Chat interface accepts user input and displays responses
 - [ ] Chat history persists across sessions
-- [ ] Typing indicators during AI processing
+- [ ] Loading indicators during AI processing
 - [ ] Support for markdown formatting in messages
 - [ ] Mobile-responsive design
 
 **Technical Notes:**
-- WebSocket connection via Socket.io or native WebSockets
-- Frontend React component (existing chat component to be adapted)
-- Automatic reconnection on connection loss
+- HTTP POST requests to backend API
+- Frontend React component (existing chat component)
+- Standard error handling and retry logic
 
 ---
 
@@ -289,9 +289,9 @@ Prevent excessive API costs through user-level rate limiting.
 ## 4. Non-Functional Requirements
 
 ### 4.1 Performance
-- AI response latency: < 3 seconds for first token
+- AI response latency: < 3 seconds for complete response
 - Task generation: < 10 seconds for 15-task plan
-- WebSocket latency: < 100ms
+- API response time: < 200ms for standard requests
 
 ### 4.2 Scalability
 - Support 1,000 concurrent users (Phase 1)
@@ -302,7 +302,7 @@ Prevent excessive API costs through user-level rate limiting.
 - Service-to-service authentication (Next.js ↔ Python)
 - API key rotation support
 - User data encryption at rest
-- HTTPS/WSS for all connections
+- HTTPS for all connections
 
 ### 4.4 Reliability
 - 99.5% uptime for chat service
@@ -349,8 +349,7 @@ Prevent excessive API costs through user-level rate limiting.
 | LLM API cost overrun | High | Medium | Implement strict rate limits, use cheaper models for simple tasks |
 | OpenAI/Claude API outage | High | Low | Implement fallback models, queue system for retry |
 | Poor AI suggestions (users reject plans) | Medium | Medium | Collect feedback, fine-tune prompts, allow manual editing |
-| WebSocket connection issues | Medium | Medium | Fallback to HTTP polling, auto-reconnect logic |
-| Slow Python service response | Medium | Low | Implement caching, optimize prompts, use streaming |
+| Slow Python service response | Medium | Low | Implement caching, optimize prompts, async processing |
 | Context file exposure to users | High | Low | Strict API route validation, no export endpoints, security audits |
 | Analytics API rate limits or costs | Medium | Medium | Cache data aggressively, batch requests, use free tier limits wisely |
 | Inaccurate analytics-based recommendations | Medium | Medium | Combine multiple data sources, allow user feedback to retrain |
@@ -369,7 +368,6 @@ Prevent excessive API costs through user-level rate limiting.
 - Next.js 16 (existing)
 - FastAPI (new - Python agent service)
 - PostgreSQL (existing)
-- WebSocket library (Socket.io or native)
 
 ### Development Dependencies
 - Docker (for Python service containerization)

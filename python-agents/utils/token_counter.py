@@ -2,7 +2,7 @@
 Token Counter Utility
 Estimates token counts for text (approximate)
 """
-import re
+
 
 
 def count_tokens(text: str, model: str = "gpt-3.5-turbo") -> int:

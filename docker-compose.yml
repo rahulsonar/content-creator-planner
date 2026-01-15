@@ -41,6 +41,25 @@ services:
       postgres:
         condition: service_healthy
 
+  python-agents:
+    build:
+      context: ./python-agents
+      dockerfile: Dockerfile
+    container_name: content-planner-python
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_planner
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+    volumes:
+      - ./python-agents:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   node_modules:

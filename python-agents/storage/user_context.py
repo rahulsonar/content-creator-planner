@@ -4,6 +4,7 @@ Manages user context files and database records
 """
 import os
 import json
+import time
 from typing import Dict, Any, Optional
 from pathlib import Path
 from config.settings import settings
@@ -116,7 +117,7 @@ class UserContextStorage:
         """
         try:
             user_dir = self.get_user_directory(user_id)
-            file_name = f"{conversation_type}_{int(os.times().elapsed)}.json"
+            file_name = f"{conversation_type}_{int(time.time())}.json"
             file_path = user_dir / file_name
             
             with open(file_path, 'w', encoding='utf-8') as f:

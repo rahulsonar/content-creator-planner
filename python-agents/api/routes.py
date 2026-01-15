@@ -12,8 +12,7 @@ from schemas.requests import (
 from schemas.responses import (
     OnboardingResponse,
     PlanningResponse,
-    ChatResponse,
-    ErrorResponse
+    ChatResponse
 )
 from api.middleware import verify_internal_request
 from agents import OnboardingAgent, PlanningAgent, ModelOrchestrator

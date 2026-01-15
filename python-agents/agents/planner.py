@@ -2,7 +2,7 @@
 Planning Agent
 Generates content project plans and task breakdowns
 """
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from agents.base import BaseAgent
 from config.prompts import PLANNING_SYSTEM_PROMPT, PLANNING_TASK_FORMAT_EXAMPLE
 from utils.logger import logger
