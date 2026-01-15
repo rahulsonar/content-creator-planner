@@ -19,9 +19,10 @@ export default function ChatPage() {
     },
   ]);
   const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSend = () => {
-    if (!input.trim()) return;
+  const handleSend = async () => {
+    if (!input.trim() || isLoading) return;
 
     const userMessage: Message = {
       id: messages.length + 1,
@@ -32,17 +33,52 @@ export default function ChatPage() {
 
     setMessages([...messages, userMessage]);
     setInput('');
+    setIsLoading(true);
 
-    // Simulate AI response after a short delay
-    setTimeout(() => {
+    try {
+      // Call the OpenAI API through our backend
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [...messages, userMessage].map(msg => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to get response');
+      }
+
+      const data = await response.json();
+
       const aiMessage: Message = {
         id: messages.length + 2,
         role: 'assistant',
-        content: 'This is a dummy response. The AI functionality will be implemented soon!',
+        content: data.content,
         timestamp: new Date(),
       };
+
       setMessages(prev => [...prev, aiMessage]);
-    }, 1000);
+    } catch (error: any) {
+      console.error('Chat error:', error);
+      
+      const errorMessage: Message = {
+        id: messages.length + 2,
+        role: 'assistant',
+        content: `Sorry, I encountered an error: ${error.message}. Please make sure the OpenAI API key is configured.`,
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
