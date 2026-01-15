@@ -3,17 +3,23 @@
 ## Project Overview
 A Next.js 16 App Router application for content creators to plan, organize, and track their projects. Built with TypeScript, Prisma ORM (PostgreSQL), JWT authentication, and Docker containerization. Focused on task management with hierarchical subtasks, calendar views, and Kanban boards.
 
+## Project Structure
+The repository is organized into separate directories:
+- **nextjs/** - Next.js 16 application (frontend, API routes, middleware, Prisma ORM)
+- **python-agents/** - Python FastAPI service for AI agents
+- **docs/** - Project documentation
+
 ## Architecture & Key Decisions
 
 ### Authentication Flow
 - **JWT-based authentication** using `jsonwebtoken` library
 - **Dual token storage**: HTTP-only cookies (server) + localStorage (client-side API calls)
-- **Middleware protection** ([middleware.ts](middleware.ts)) applies to ALL routes except `/login`, `/api/auth/*`, and static assets
-- Default user: `admin@example.com` / `Admin123!` (see [prisma/seed.ts](prisma/seed.ts#L13))
-- Password hashing: bcrypt with 12 rounds (see [app/api/auth/login/route.ts](app/api/auth/login/route.ts))
+- **Middleware protection** ([nextjs/middleware.ts](nextjs/middleware.ts)) applies to ALL routes except `/login`, `/api/auth/*`, and static assets
+- Default user: `admin@example.com` / `Admin123!` (see [nextjs/prisma/seed.ts](nextjs/prisma/seed.ts#L13))
+- Password hashing: bcrypt with 12 rounds (see [nextjs/app/api/auth/login/route.ts](nextjs/app/api/auth/login/route.ts))
 
 ### Database & Prisma Patterns
-- **Custom Prisma client setup** ([lib/prisma.ts](lib/prisma.ts)) uses PostgreSQL adapter with connection pooling
+- **Custom Prisma client setup** ([nextjs/lib/prisma.ts](nextjs/lib/prisma.ts)) uses PostgreSQL adapter with connection pooling
 - **Hierarchical task structure**: Tasks can have parent/subtasks via self-referential relation (`parentId` → `subtasks[]`)
 - **Task statuses**: `TODO`, `IN_PROGRESS`, `REVIEW`, `BLOCKED`, `COMPLETED`, `CANCELLED`
 - **Priorities**: `LOW`, `MEDIUM`, `HIGH`, `URGENT`
@@ -21,9 +27,9 @@ A Next.js 16 App Router application for content creators to plan, organize, and 
 
 ### Route Organization
 - **Route groups for layouts**: 
-  - `app/(app)/*` → Authenticated pages with navigation (Home, Kanban, Calendar, Chat)
-  - `app/login/*` → Public login page with gradient background layout
-- **Path alias**: `@/*` maps to project root in [tsconfig.json](tsconfig.json#L22) - use for imports like `@/lib/prisma`
+  - `nextjs/app/(app)/*` → Authenticated pages with navigation (Home, Kanban, Calendar, Chat)
+  - `nextjs/app/login/*` → Public login page with gradient background layout
+- **Path alias**: `@/*` maps to nextjs project root in [nextjs/tsconfig.json](nextjs/tsconfig.json#L22) - use for imports like `@/lib/prisma`
 
 ## Development Workflows
 
@@ -78,7 +84,7 @@ npx prisma studio
 ## Code Conventions
 
 ### API Route Structure
-- **Standard pattern** for API routes (see [app/api/tasks/route.ts](app/api/tasks/route.ts)):
+- **Standard pattern** for API routes (see [nextjs/app/api/tasks/route.ts](nextjs/app/api/tasks/route.ts)):
   ```typescript
   import { prisma } from '@/lib/prisma';
   export async function GET() {
@@ -95,7 +101,7 @@ npx prisma studio
 - **Email normalization**: Always lowercase emails (e.g., `email.toLowerCase()`) in auth logic
 
 ### Authentication Helpers
-- **Server-side**: Use [lib/auth/helpers.ts](lib/auth/helpers.ts) → `verifyToken()`, `generateToken()`
+- **Server-side**: Use [nextjs/lib/auth/helpers.ts](nextjs/lib/auth/helpers.ts) → `verifyToken()`, `generateToken()`
 - **Client-side**: Same file exports `getStoredToken()`, `getStoredUser()`, `clearAuth()` with `typeof window` checks
 - **JWT payload structure**: `{ userId, email, name }` with 7-day expiration
 
@@ -125,13 +131,14 @@ NODE_ENV=development|production                         # Affects Prisma client 
 
 ### Common Pitfalls
 - **Prisma client regeneration**: Always run `npx prisma generate` after schema changes
-- **Migration state**: Migrations tracked in `prisma/migrations/` - never edit committed migrations
+- **Migration state**: Migrations tracked in `nextjs/prisma/migrations/` - never edit committed migrations
 - **Docker volume caching**: If deps aren't installing, delete `node_modules` volume and rebuild
 - **Middleware matcher**: Be careful with pattern - excludes `_next/*`, images, favicons
 
 ## File Reference Quick Links
-- Auth implementation: [app/api/auth/login/route.ts](app/api/auth/login/route.ts), [middleware.ts](middleware.ts)
-- Database schema: [prisma/schema.prisma](prisma/schema.prisma)
-- Seed data: [prisma/seed.ts](prisma/seed.ts) (20+ realistic content creator tasks)
-- Prisma setup: [lib/prisma.ts](lib/prisma.ts) (uses `@prisma/adapter-pg`)
+- Auth implementation: [nextjs/app/api/auth/login/route.ts](nextjs/app/api/auth/login/route.ts), [nextjs/middleware.ts](nextjs/middleware.ts)
+- Database schema: [nextjs/prisma/schema.prisma](nextjs/prisma/schema.prisma)
+- Seed data: [nextjs/prisma/seed.ts](nextjs/prisma/seed.ts) (20+ realistic content creator tasks)
+- Prisma setup: [nextjs/lib/prisma.ts](nextjs/lib/prisma.ts) (uses `@prisma/adapter-pg`)
+- Docker config: [docker-compose.yml](docker-compose.yml), [nextjs/Dockerfile](nextjs/Dockerfile)
 - Auth docs: [docs/authentication.md](docs/authentication.md) (API specs + examples)

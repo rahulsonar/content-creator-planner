@@ -2,6 +2,15 @@
 
 A Next.js application designed to help content creators plan, organize, and schedule their content creation journey.
 
+## Project Structure
+
+```
+├── nextjs/            # Next.js 16 application (frontend, API routes & Prisma ORM)
+├── python-agents/     # Python FastAPI service for AI agents
+├── docs/             # Project documentation
+└── docker-compose.yml # Docker orchestration
+```
+
 ## Features
 
 - 📅 **Plan Ahead** - Create content calendars and never miss a posting schedule
@@ -10,9 +19,35 @@ A Next.js application designed to help content creators plan, organize, and sche
 
 ## Getting Started
 
-First, install the dependencies (if not already installed):
+### Using Docker (Recommended)
+
+Start both PostgreSQL and Next.js app:
 
 ```bash
+docker compose up
+```
+
+Run commands inside the container:
+
+```bash
+# Install dependencies
+docker exec -it content-planner-app npm install
+
+# Run development server
+docker exec -it content-planner-app npm run dev
+
+# Database operations
+docker exec -it content-planner-app npx prisma migrate dev
+docker exec -it content-planner-app npx prisma generate
+docker exec -it content-planner-app npm run db:seed
+```
+
+### Local Development (Without Docker)
+
+Navigate to the nextjs directory:
+
+```bash
+cd nextjs
 npm install
 ```
 
@@ -30,7 +65,7 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+You can start editing the page by modifying `nextjs/app/page.tsx`. The page auto-updates as you edit the file.
 
 ## Tech Stack
 
