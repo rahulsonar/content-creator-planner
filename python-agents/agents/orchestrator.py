@@ -51,11 +51,11 @@ class ModelOrchestrator:
         
         # Planning with standard context
         if task_type == "planning":
-            return "gpt-4"
+            return "gpt-5"
         
         # High complexity tasks
         if complexity == "high":
-            return "gpt-4"
+            return "gpt-5"
         
         # General chat - use efficient model
         if task_type == "chat":

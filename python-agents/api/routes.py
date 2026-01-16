@@ -176,7 +176,8 @@ async def generate_plan(
         else:
             client = AnthropicClient(model=model_name)
         
-        agent = PlanningAgent(client)
+        from config.settings import settings
+        agent = PlanningAgent(client, enable_openai_tools=settings.ENABLE_OPENAI_TOOLS)
         plan = await agent.generate_plan(request.projectDescription, user_context)
         
         # TODO: Save plan to storage
@@ -218,6 +219,13 @@ async def planning_chat(
                 conversation_type="planning",
                 title="Planning Chat"
             )
+        else:
+            # If conversation exists, check if it needs to be claimed by authenticated user
+            conversation = await conversation_storage.get_conversation(conversation_id)
+            if conversation and conversation.get("userId") == "anonymous" and user_id != "anonymous":
+                # Claim this anonymous conversation for the authenticated user
+                await conversation_storage.update_conversation_user(conversation_id, user_id)
+                logger.info(f"Claimed anonymous conversation {conversation_id} for user {user_id}")
         
         # Save user message
         await conversation_storage.save_message(
@@ -239,7 +247,8 @@ async def planning_chat(
         else:
             client = AnthropicClient(model=model_name)
         
-        agent = PlanningAgent(client)
+        from config.settings import settings
+        agent = PlanningAgent(client, enable_openai_tools=settings.ENABLE_OPENAI_TOOLS)
         
         # Load conversation history into agent
         if conversation_messages:
@@ -295,6 +304,13 @@ async def chat(
                 conversation_type="chat",
                 title="General Chat"
             )
+        else:
+            # If conversation exists, check if it needs to be claimed by authenticated user
+            conversation = await conversation_storage.get_conversation(conversation_id)
+            if conversation and conversation.get("userId") == "anonymous" and user_id != "anonymous":
+                # Claim this anonymous conversation for the authenticated user
+                await conversation_storage.update_conversation_user(conversation_id, user_id)
+                logger.info(f"Claimed anonymous conversation {conversation_id} for user {user_id}")
         
         # Save user message
         await conversation_storage.save_message(
@@ -394,8 +410,8 @@ async def get_conversation(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        # Verify user owns this conversation
-        if conversation["userId"] != user_id:
+        # Verify user owns this conversation or conversation is anonymous
+        if conversation["userId"] != user_id and conversation["userId"] != "anonymous":
             raise HTTPException(status_code=403, detail="Access denied")
         
         return conversation

@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Context Storage
     CONTEXT_STORAGE_PATH: str = "/app/agent_context"
     
+    # Agent Configuration
+    ENABLE_OPENAI_TOOLS: bool = True
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

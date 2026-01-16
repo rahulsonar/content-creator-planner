@@ -26,8 +26,8 @@ class OpenAIClient:
     async def generate_completion(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 1000,
+        #temperature: float = 0.7,
+        #max_tokens: int = 1000,
         tools: List[Dict] = None,
         **kwargs
     ):
@@ -50,8 +50,8 @@ class OpenAIClient:
             params = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
+                #"temperature": temperature,
+                #"max_tokens": max_tokens,
                 **kwargs
             }
             
@@ -78,8 +78,8 @@ class OpenAIClient:
     async def stream_completion(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 1000,
+        #temperature: float = 0.7,
+        #max_tokens: int = 1000,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
@@ -100,8 +100,8 @@ class OpenAIClient:
             stream = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                #temperature=temperature,
+                #max_tokens=max_tokens,
                 stream=True,
                 **kwargs
             )
