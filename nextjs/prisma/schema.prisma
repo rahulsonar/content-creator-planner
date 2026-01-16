@@ -105,6 +105,44 @@ model UserContext {
   
 }
 
+model ContextManagerConversation {
+  id              String   @id @default(cuid())
+  userId          String
+  conversationId  String?  // Optional: link to parent Conversation if applicable
+  agentName       String   @default("context_manager")
+  
+  // Message content
+  userMessage     String   @db.Text
+  assistantMessage String?  @db.Text
+  
+  // Tool execution logs
+  toolCalls       Json?    // Array of {name, arguments, timestamp}
+  toolResults     Json?    // Array of {tool_call_id, result, success, timestamp}
+  
+  // Metadata
+  metadata        Json?    // Additional context: model used, tokens, duration, etc.
+  status          ConversationStatus @default(COMPLETED)
+  errorMessage    String?  @db.Text
+  
+  // Timestamps
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+  @@index([conversationId])
+  @@index([agentName])
+  @@index([startedAt])
+}
+
+enum ConversationStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
 enum DependencyType {
   FINISH_TO_START
   START_TO_START

@@ -16,6 +16,35 @@ A Next.js application designed to help content creators plan, organize, and sche
 - 📅 **Plan Ahead** - Create content calendars and never miss a posting schedule
 - 💡 **Organize Ideas** - Keep track of all your content ideas in one place
 - 📊 **Track Progress** - Monitor your content performance and engagement
+- 🤖 **AI Planning Agent** - Get AI-powered content planning assistance
+- 🧪 **Dummy AI Mode** - Test without API costs (see [Dummy AI Mode docs](docs/dummy-ai-mode.md))
+
+## Configuration
+
+### Environment Variables
+
+Copy `.env.example` to `.env` and configure:
+
+```env
+# AI Configuration
+USE_DUMMY_AI=false          # Set to true for testing without API costs
+OPENAI_API_KEY=your_key     # Required when USE_DUMMY_AI=false
+ANTHROPIC_API_KEY=your_key  # Required when USE_DUMMY_AI=false
+
+# Security
+JWT_SECRET=your-secret-key
+INTERNAL_API_SECRET=your-internal-secret
+```
+
+### Dummy AI Mode
+
+For development and testing without incurring AI API costs, enable dummy mode:
+
+```env
+USE_DUMMY_AI=true
+```
+
+This will return predefined responses instead of calling OpenAI APIs. See [docs/dummy-ai-mode.md](docs/dummy-ai-mode.md) for details.
 
 ## Getting Started
 

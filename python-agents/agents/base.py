@@ -16,7 +16,7 @@ class BaseAgent(ABC):
         Initialize base agent
         
         Args:
-            model_client: LLM client (OpenAI or Anthropic)
+            model_client: LLM client (OpenAI)
             agent_type: Type identifier (e.g., "onboarding", "planning")
         """
         self.model_client = model_client
@@ -38,24 +38,6 @@ class BaseAgent(ABC):
             
         Returns:
             Agent's response message
-        """
-        pass
-    
-    @abstractmethod
-    async def stream_response(
-        self,
-        user_message: str,
-        user_context: Optional[Dict[str, Any]] = None
-    ):
-        """
-        Stream response tokens in real-time
-        
-        Args:
-            user_message: User's input message
-            user_context: Optional user context data
-            
-        Yields:
-            Response tokens as they're generated
         """
         pass
     

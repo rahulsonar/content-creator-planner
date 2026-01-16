@@ -21,6 +21,7 @@ class OpenAIClient:
         """
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = model
+        self.client_type = 'openai'
         logger.info(f"Initialized OpenAI client with model: {model}")
     
     async def generate_completion(
@@ -140,3 +141,12 @@ class OpenAIClient:
         for message in messages:
             total += count_tokens(message.get("content", ""))
         return total
+    
+    def supports_tools(self) -> bool:
+        """
+        Check if this client supports tool calling
+        
+        Returns:
+            True if tool calling is supported
+        """
+        return True

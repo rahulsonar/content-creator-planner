@@ -3,6 +3,8 @@
 ## Project Overview
 A Next.js 16 App Router application for content creators to plan, organize, and track their projects. Built with TypeScript, Prisma ORM (PostgreSQL), JWT authentication, and Docker containerization. Focused on task management with hierarchical subtasks, calendar views, and Kanban boards.
 
+**⚠️ Prototype Mode**: This is a prototype project. Do not create test cases or documentation. Keep implementations simple and focused on functionality.
+
 ## Project Structure
 The repository is organized into separate directories:
 - **nextjs/** - Next.js 16 application (frontend, API routes, middleware, Prisma ORM)
