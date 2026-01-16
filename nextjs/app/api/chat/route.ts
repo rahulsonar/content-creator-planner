@@ -1,89 +1,63 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { verifyToken } from '@/lib/auth/helpers';
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://python-agents:8000';
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages } = await request.json();
+    const { message, conversationId } = await request.json();
 
-    if (!messages || !Array.isArray(messages)) {
+    if (!message || typeof message !== 'string') {
       return NextResponse.json(
-        { error: 'Messages array is required' },
+        { error: 'Message is required' },
         { status: 400 }
       );
     }
 
-    // Check if API key is configured
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
-        { status: 500 }
-      );
+    // Extract user info from token for internal API call
+    const token = request.cookies.get('token')?.value;
+    let userId = 'anonymous';
+    
+    if (token) {
+      try {
+        const decoded = verifyToken(token);
+        userId = decoded.userId;
+      } catch (error) {
+        console.error('Token verification failed:', error);
+      }
     }
 
-    // Call OpenAI API
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', // Using cost-effective model for POC,
-      
-      messages: [
-        {
-          role: 'system',
-          content: `
-          You are a helpful AI assistant for content creators. Help them plan content calendars, suggest video ideas, analyze trends, optimize posting schedules, and provide creative guidance.
-          - Try to complete the overall discussion in max 10 interactions.
-          - Keep responses concise and actionable.
-          - Keep tokens under 10000, if exceeding, summarize previous messages to reduce token count. Ask user to start a new thread if needed.
-          - Focus on content strategy, ideation, and planning advice. If user asks for unrelated topics, politely decline and steer back to content creation topics.
-          - Once user accepts the content plan, use tool to create tasks using below json format:
-          {
-            "action": "create_tasks",
-            "tasks": [
-              {
-                "title": "Task title",
-                "description": "Task description",
-                "due_date": "YYYY-MM-DD"
-              }
-            ]
-          }
-          `,
-        },
-        ...messages,
-      ],
-      temperature: 0.7,
-      max_tokens: 1000,
+    // Call Python Planning Agent API
+    const response = await fetch(`${PYTHON_API_URL}/api/planning/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-ID': userId,
+        'X-Internal-Secret': process.env.INTERNAL_API_SECRET || 'dev-secret-change-in-production',
+      },
+      body: JSON.stringify({
+        message: message,
+        conversationId: conversationId,
+        context: null, // TODO: Pass user context from profile
+      }),
     });
 
-    const assistantMessage = completion.choices[0]?.message;
-
-    if (!assistantMessage) {
-      throw new Error('No response from OpenAI');
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Python API Error:', errorData);
+      throw new Error(errorData.detail || 'Python API request failed');
     }
+
+    const data = await response.json();
 
     return NextResponse.json({
-      role: assistantMessage.role,
-      content: assistantMessage.content,
+      role: 'assistant',
+      content: data.message,
+      model: data.model,
+      conversationId: data.conversationId,
     });
   } catch (error: any) {
-    console.error('OpenAI API Error:', error);
-    
-    // Handle specific OpenAI errors
-    if (error?.status === 401) {
-      return NextResponse.json(
-        { error: 'Invalid OpenAI API key' },
-        { status: 401 }
-      );
-    }
-
-    if (error?.status === 429) {
-      return NextResponse.json(
-        { error: 'Rate limit exceeded. Please try again later.' },
-        { status: 429 }
-      );
-    }
+    console.error('Chat API Error:', error);
 
     return NextResponse.json(
       { error: 'Failed to get AI response', details: error?.message },

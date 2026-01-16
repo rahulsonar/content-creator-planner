@@ -4,6 +4,8 @@ Handles database operations for conversations
 """
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from sqlalchemy import text
+from storage.database import db_manager
 from utils.logger import logger
 
 
@@ -12,13 +14,14 @@ class ConversationStorage:
     
     def __init__(self):
         """Initialize conversation storage"""
-        # TODO: Initialize database connection
+        self.db = db_manager
         logger.info("Initialized conversation storage")
     
     async def create_conversation(
         self,
         user_id: str,
-        conversation_type: str
+        conversation_type: str = "chat",
+        title: Optional[str] = None
     ) -> str:
         """
         Create new conversation record
@@ -26,14 +29,37 @@ class ConversationStorage:
         Args:
             user_id: User identifier
             conversation_type: Type (onboarding, planning, chat)
+            title: Optional conversation title
             
         Returns:
             Conversation ID
         """
-        # TODO: Implement database insert
-        conversation_id = f"conv_{datetime.now().timestamp()}"
-        logger.info(f"Created conversation: {conversation_id}")
-        return conversation_id
+        try:
+            async for session in self.db.get_session():
+                # Insert conversation into database
+                query = text("""
+                    INSERT INTO "Conversation" ("id", "userId", "title", "messages", "metadata", "createdAt", "updatedAt")
+                    VALUES (gen_random_uuid()::text, :userId, :title, :messages, :metadata, NOW(), NOW())
+                    RETURNING id
+                """)
+                
+                result = await session.execute(
+                    query,
+                    {
+                        "userId": user_id,
+                        "title": title or f"{conversation_type.title()} conversation",
+                        "messages": "[]",  # JSON array as string
+                        "metadata": f'{{"type": "{conversation_type}"}}'  # JSON object as string
+                    }
+                )
+                await session.commit()
+                
+                conversation_id = result.scalar_one()
+                logger.info(f"Created conversation: {conversation_id} for user {user_id}")
+                return conversation_id
+        except Exception as e:
+            logger.error(f"Error creating conversation: {e}")
+            raise
     
     async def save_message(
         self,
@@ -53,8 +79,46 @@ class ConversationStorage:
             model: Model used (if assistant)
             tokens_used: Token count
         """
-        # TODO: Implement database insert/update
-        logger.debug(f"Saved {role} message to conversation {conversation_id}")
+        try:
+            async for session in self.db.get_session():
+                import json
+                
+                # Build message object
+                message = {
+                    "role": role,
+                    "content": content,
+                    "timestamp": datetime.now().isoformat()
+                }
+                if model:
+                    message["model"] = model
+                if tokens_used:
+                    message["tokens"] = tokens_used
+                
+                # Append message to the messages JSON array
+                # Cast the parameter as JSONB using SQLAlchemy's cast function
+                from sqlalchemy import cast
+                from sqlalchemy.dialects.postgresql import JSONB
+                
+                query = text("""
+                    UPDATE "Conversation"
+                    SET messages = messages || CAST(:message_json AS jsonb),
+                        "updatedAt" = NOW()
+                    WHERE id = :conv_id
+                """)
+                
+                await session.execute(
+                    query,
+                    {
+                        "conv_id": conversation_id,
+                        "message_json": json.dumps([message])  # Convert to JSON array string
+                    }
+                )
+                await session.commit()
+                
+                logger.debug(f"Saved {role} message to conversation {conversation_id}")
+        except Exception as e:
+            logger.error(f"Error saving message: {e}")
+            raise
     
     async def get_conversation(
         self,
@@ -69,9 +133,37 @@ class ConversationStorage:
         Returns:
             Conversation data or None
         """
-        # TODO: Implement database query
-        logger.debug(f"Retrieved conversation: {conversation_id}")
-        return None
+        try:
+            async for session in self.db.get_session():
+                query = text("""
+                    SELECT id, "userId", title, messages, metadata, "createdAt", "updatedAt"
+                    FROM "Conversation"
+                    WHERE id = :conversationId
+                """)
+                
+                result = await session.execute(
+                    query,
+                    {"conversationId": conversation_id}
+                )
+                row = result.fetchone()
+                
+                if row:
+                    conversation = {
+                        "id": row[0],
+                        "userId": row[1],
+                        "title": row[2],
+                        "messages": row[3],
+                        "metadata": row[4],
+                        "createdAt": row[5].isoformat() if row[5] else None,
+                        "updatedAt": row[6].isoformat() if row[6] else None
+                    }
+                    logger.debug(f"Retrieved conversation: {conversation_id}")
+                    return conversation
+                
+                return None
+        except Exception as e:
+            logger.error(f"Error getting conversation: {e}")
+            raise
     
     async def get_user_conversations(
         self,
@@ -90,9 +182,48 @@ class ConversationStorage:
         Returns:
             List of conversations
         """
-        # TODO: Implement database query
-        logger.debug(f"Retrieved conversations for user: {user_id}")
-        return []
+        try:
+            async for session in self.db.get_session():
+                if conversation_type:
+                    query = text("""
+                        SELECT id, "userId", title, messages, metadata, "createdAt", "updatedAt"
+                        FROM "Conversation"
+                        WHERE "userId" = :userId 
+                        AND metadata->>'type' = :convType
+                        ORDER BY "updatedAt" DESC
+                        LIMIT :limit
+                    """)
+                    params = {"userId": user_id, "convType": conversation_type, "limit": limit}
+                else:
+                    query = text("""
+                        SELECT id, "userId", title, messages, metadata, "createdAt", "updatedAt"
+                        FROM "Conversation"
+                        WHERE "userId" = :userId
+                        ORDER BY "updatedAt" DESC
+                        LIMIT :limit
+                    """)
+                    params = {"userId": user_id, "limit": limit}
+                
+                result = await session.execute(query, params)
+                rows = result.fetchall()
+                
+                conversations = []
+                for row in rows:
+                    conversations.append({
+                        "id": row[0],
+                        "userId": row[1],
+                        "title": row[2],
+                        "messages": row[3],
+                        "metadata": row[4],
+                        "createdAt": row[5].isoformat() if row[5] else None,
+                        "updatedAt": row[6].isoformat() if row[6] else None
+                    })
+                
+                logger.debug(f"Retrieved {len(conversations)} conversations for user: {user_id}")
+                return conversations
+        except Exception as e:
+            logger.error(f"Error getting user conversations: {e}")
+            raise
     
     async def update_conversation_status(
         self,
@@ -106,8 +237,30 @@ class ConversationStorage:
             conversation_id: Conversation identifier
             status: New status (active, completed, abandoned)
         """
-        # TODO: Implement database update
-        logger.info(f"Updated conversation {conversation_id} status to {status}")
+        try:
+            async for session in self.db.get_session():
+                import json
+                
+                query = text("""
+                    UPDATE "Conversation"
+                    SET metadata = jsonb_set(metadata, '{status}', CAST(:status_json AS jsonb)),
+                        "updatedAt" = NOW()
+                    WHERE id = :conv_id
+                """)
+                
+                await session.execute(
+                    query,
+                    {
+                        "conv_id": conversation_id,
+                        "status_json": json.dumps(status)  # Convert to JSON string
+                    }
+                )
+                await session.commit()
+                
+                logger.info(f"Updated conversation {conversation_id} status to {status}")
+        except Exception as e:
+            logger.error(f"Error updating conversation status: {e}")
+            raise
     
     async def calculate_cost(
         self,
@@ -122,6 +275,36 @@ class ConversationStorage:
         Returns:
             Estimated cost in USD
         """
-        # TODO: Implement cost calculation from message tokens
-        logger.debug(f"Calculated cost for conversation {conversation_id}")
-        return 0.0
+        try:
+            async for session in self.db.get_session():
+                query = text("""
+                    SELECT messages
+                    FROM "Conversation"
+                    WHERE id = :conversationId
+                """)
+                
+                result = await session.execute(
+                    query,
+                    {"conversationId": conversation_id}
+                )
+                row = result.fetchone()
+                
+                if not row or not row[0]:
+                    return 0.0
+                
+                # Calculate cost from message tokens
+                total_tokens = 0
+                messages = row[0] if isinstance(row[0], list) else []
+                
+                for msg in messages:
+                    if isinstance(msg, dict) and "tokens" in msg:
+                        total_tokens += msg["tokens"]
+                
+                # Rough cost estimate: $0.002 per 1k tokens (average)
+                cost = (total_tokens / 1000) * 0.002
+                
+                logger.debug(f"Calculated cost for conversation {conversation_id}: ${cost:.4f}")
+                return cost
+        except Exception as e:
+            logger.error(f"Error calculating conversation cost: {e}")
+            return 0.0

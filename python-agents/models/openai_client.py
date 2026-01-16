@@ -28,8 +28,9 @@ class OpenAIClient:
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
         max_tokens: int = 1000,
+        tools: List[Dict] = None,
         **kwargs
-    ) -> str:
+    ):
         """
         Generate a completion (non-streaming)
         
@@ -37,26 +38,37 @@ class OpenAIClient:
             messages: Conversation messages
             temperature: Sampling temperature (0-2)
             max_tokens: Maximum tokens to generate
+            tools: Optional function definitions for tool calling
             **kwargs: Additional OpenAI parameters
             
         Returns:
-            Generated text
+            Generated text or full response if tools are used
         """
         try:
             logger.debug(f"Generating completion with {len(messages)} messages")
             
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+            params = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
                 **kwargs
-            )
+            }
+            
+            if tools:
+                params["tools"] = tools
+                params["tool_choice"] = "auto"
+            
+            response = await self.client.chat.completions.create(**params)
+            
+            tokens_used = response.usage.total_tokens
+            logger.info(f"Completion generated: {tokens_used} tokens")
+            
+            # If tools were used, return full response for processing
+            if tools:
+                return response
             
             content = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens
-            
-            logger.info(f"Completion generated: {tokens_used} tokens")
             return content
             
         except Exception as e:

@@ -59,18 +59,31 @@ class BaseAgent(ABC):
         """
         pass
     
-    def add_to_history(self, role: str, content: str):
+    def add_to_history(self, role: str, content, tool_call_id: str = None):
         """
         Add message to conversation history
         
         Args:
-            role: Message role (user/assistant/system)
-            content: Message content
+            role: Message role (user/assistant/system/tool)
+            content: Message content (string or dict for assistant with tool_calls)
+            tool_call_id: Optional tool call ID for tool role messages
         """
-        self.conversation_history.append({
-            "role": role,
-            "content": content
-        })
+        message = {"role": role}
+        
+        # Handle different content types
+        if isinstance(content, dict):
+            # Assistant message with tool calls
+            message.update(content)
+        elif role == "tool":
+            # Tool result message for OpenAI
+            message["content"] = str(content)
+            if tool_call_id:
+                message["tool_call_id"] = tool_call_id
+        else:
+            # Regular text message
+            message["content"] = content
+        
+        self.conversation_history.append(message)
         logger.debug(f"Added {role} message to {self.agent_type} history")
     
     def get_history(self) -> List[Dict[str, str]]:
@@ -81,6 +94,32 @@ class BaseAgent(ABC):
         """Clear conversation history"""
         self.conversation_history = []
         logger.info(f"Cleared {self.agent_type} conversation history")
+    
+    def load_conversation_history(self, messages: List[Dict[str, Any]]):
+        """
+        Load conversation history from storage
+        
+        Args:
+            messages: List of message objects with role and content
+        """
+        # Preserve system messages that were added during initialization
+        system_messages = [msg for msg in self.conversation_history if msg.get("role") == "system"]
+        
+        # Clear and rebuild with system messages first
+        self.conversation_history = system_messages.copy()
+        
+        # Add historical messages (skip system messages from history)
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            
+            if role and content and role != "system":
+                self.conversation_history.append({
+                    "role": role,
+                    "content": content
+                })
+        
+        logger.info(f"Loaded {len(messages)} messages into {self.agent_type} history")
     
     def get_token_count(self) -> int:
         """

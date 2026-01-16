@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     
     # Service Authentication
     INTERNAL_API_SECRET: str
+    JWT_SECRET: str = "your-secret-key-change-in-production"
     
     # Environment
     ENVIRONMENT: str = "development"
