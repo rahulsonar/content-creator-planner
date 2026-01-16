@@ -6,16 +6,6 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
 
-class OnboardingStartRequest(BaseModel):
-    """Request to start onboarding"""
-    conversationId: Optional[str] = None
-
-
-class OnboardingMessageRequest(BaseModel):
-    """Onboarding message from user"""
-    conversationId: str
-    message: str = Field(..., min_length=1, max_length=5000)
-
 
 class PlanningRequest(BaseModel):
     """Request to generate project plan"""

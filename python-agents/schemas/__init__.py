@@ -1,14 +1,11 @@
 """Schemas module initialization"""
 from .requests import (
-    OnboardingStartRequest,
-    OnboardingMessageRequest,
     PlanningRequest,
     ChatRequest,
     TaskCreateRequest,
     ContextUpdateRequest,
 )
 from .responses import (
-    OnboardingResponse,
     PlanningResponse,
     ChatResponse,
     ConversationResponse,
@@ -20,14 +17,11 @@ from .responses import (
 
 __all__ = [
     # Requests
-    "OnboardingStartRequest",
-    "OnboardingMessageRequest",
     "PlanningRequest",
     "ChatRequest",
     "TaskCreateRequest",
     "ContextUpdateRequest",
     # Responses
-    "OnboardingResponse",
     "PlanningResponse",
     "ChatResponse",
     "ConversationResponse",

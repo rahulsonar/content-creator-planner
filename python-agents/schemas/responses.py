@@ -7,14 +7,6 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 
 
-class OnboardingResponse(BaseModel):
-    """Onboarding agent response"""
-    message: str
-    conversationId: Optional[str] = None
-    model: str
-    isComplete: bool = False
-
-
 class PlanningResponse(BaseModel):
     """Planning agent response"""
     plan: Dict[str, Any]

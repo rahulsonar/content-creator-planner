@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     
     # AI Model API Keys
     OPENAI_API_KEY: str
-    ANTHROPIC_API_KEY: str
     
     # Service Authentication
     INTERNAL_API_SECRET: str
@@ -38,6 +37,7 @@ class Settings(BaseSettings):
     
     # Agent Configuration
     ENABLE_OPENAI_TOOLS: bool = True
+    USE_DUMMY_AI: bool = False  # When True, returns dummy responses without AI API calls
     
     class Config:
         env_file = ".env"

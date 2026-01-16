@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -20,65 +20,15 @@ const DEFAULT_MESSAGE: Message = {
 };
 
 function ChatContent() {
-  const searchParams = useSearchParams();
-  const chatId = searchParams.get('chatid');
-  console.log('Chat ID from query string:', chatId);
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([DEFAULT_MESSAGE]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [conversationId, setConversationId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  // Load conversation if chatId is provided in query string
   useEffect(() => {
     setMounted(true);
-
-    const loadConversation = async () => {
-      if (!chatId) return;
-
-      setIsLoadingConversation(true);
-      setError(null);
-
-      try {
-        const response = await fetch(`/api/chat/${chatId}`);
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || 'Failed to load conversation');
-        }
-
-        const conversation = await response.json();
-        
-        // Convert stored messages to display format
-        const loadedMessages: Message[] = conversation.messages.map((msg: any, index: number) => ({
-          id: index + 1,
-          role: msg.role,
-          content: msg.content,
-          timestamp: new Date(msg.timestamp),
-        }));
-
-        // If no messages, show default greeting
-        if (loadedMessages.length === 0) {
-          setMessages([DEFAULT_MESSAGE]);
-        } else {
-          setMessages(loadedMessages);
-        }
-
-        setConversationId(conversation.id);
-        
-      } catch (error: any) {
-        console.error('Failed to load conversation:', error);
-        setError(error.message);
-        setMessages([DEFAULT_MESSAGE]);
-      } finally {
-        setIsLoadingConversation(false);
-      }
-    };
-
-    loadConversation();
-  }, [chatId]);
+  }, []);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -91,19 +41,20 @@ function ChatContent() {
     };
 
     setMessages([...messages, userMessage]);
+    const messageToSend = input;
     setInput('');
     setIsLoading(true);
 
     try {
-      // Call the OpenAI API through our backend
+      // Call the chat API (no conversationId for new chat)
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: input,
-          conversationId: conversationId,
+          message: messageToSend,
+          conversationId: null, // First message, no ID yet
         }),
       });
 
@@ -114,19 +65,10 @@ function ChatContent() {
 
       const data = await response.json();
 
-      // Store conversationId if this is the first message
-      if (!conversationId && data.conversationId) {
-        setConversationId(data.conversationId);
+      // Redirect to the conversation-specific page
+      if (data.conversationId) {
+        router.push(`/chat/${data.conversationId}`);
       }
-
-      const aiMessage: Message = {
-        id: messages.length + 2,
-        role: 'assistant',
-        content: data.content,
-        timestamp: new Date(),
-      };
-
-      setMessages(prev => [...prev, aiMessage]);
     } catch (error: any) {
       console.error('Chat error:', error);
       
@@ -138,7 +80,6 @@ function ChatContent() {
       };
       
       setMessages(prev => [...prev, errorMessage]);
-    } finally {
       setIsLoading(false);
     }
   };
@@ -156,31 +97,12 @@ function ChatContent() {
       <div className="bg-white border-b border-gray-200 px-6 py-4">
         <h1 className="text-2xl font-bold text-gray-900">AI Content Strategy Assistant</h1>
         <p className="text-sm text-gray-600 mt-1">
-          {conversationId 
-            ? `Conversation ID: ${conversationId}` 
-            : 'Get personalized content suggestions and strategic advice'}
+          Get personalized content suggestions and strategic advice
         </p>
-        {error && (
-          <div className="mt-2 text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
-            ⚠️ {error}
-          </div>
-        )}
       </div>
 
-      {/* Loading State */}
-      {isLoadingConversation && (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-            <p className="mt-4 text-gray-600">Loading conversation...</p>
-          </div>
-        </div>
-      )}
-
       {/* Messages Container */}
-      {!isLoadingConversation && (
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
-          {messages.map((message) => (
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4">{messages.map((message) => (
             <div
               key={message.id}
               className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -229,19 +151,16 @@ function ChatContent() {
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
                     </div>
-                    <span className="text-sm text-gray-500">Thinking...</span>
+                    <span className="text-sm text-gray-500">Starting new conversation...</span>
                   </div>
                 </div>
               </div>
             </div>
           )}
         </div>
-      )}
 
       {/* Input Area */}
-      {!isLoadingConversation && (
-        <div className="bg-white border-t border-gray-200 px-6 py-4">
-        <div className="max-w-4xl mx-auto">
+      <div className="bg-white border-t border-gray-200 px-6 py-4">{<div className="max-w-4xl mx-auto">
           <div className="flex gap-3">
             <textarea
               value={input}
@@ -296,9 +215,8 @@ function ChatContent() {
               ⏰ Schedule analysis
             </button>
           </div>
-        </div>
-        </div>
-      )}
+        </div>}
+      </div>
     </div>
   );
 }
