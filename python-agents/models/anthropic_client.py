@@ -12,7 +12,7 @@ from utils.token_counter import count_tokens
 class AnthropicClient:
     """Wrapper for Anthropic API interactions"""
     
-    def __init__(self, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, model: str = "claude-sonnet-4-20250514"):
         """
         Initialize Anthropic client
         
@@ -46,22 +46,29 @@ class AnthropicClient:
             logger.debug(f"Generating completion with {len(messages)} messages")
             
             # Extract system message if present
-            system_message = None
+            system_messages = []
             filtered_messages = []
             for msg in messages:
                 if msg["role"] == "system":
-                    system_message = msg["content"]
+                    system_messages.append({
+                        "type": "text",
+                        "text": msg["content"]
+                    })
                 else:
                     filtered_messages.append(msg)
             
-            response = await self.client.messages.create(
-                model=self.model,
-                messages=filtered_messages,
-                system=system_message,
-                temperature=temperature,
-                max_tokens=max_tokens,
+            # Build kwargs conditionally
+            api_kwargs = {
+                "model": self.model,
+                "messages": filtered_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
                 **kwargs
-            )
+            }
+            if system_messages:
+                api_kwargs["system"] = system_messages
+            
+            response = await self.client.messages.create(**api_kwargs)
             
             content = response.content[0].text
             tokens_used = response.usage.input_tokens + response.usage.output_tokens
@@ -96,22 +103,29 @@ class AnthropicClient:
             logger.debug(f"Starting streaming completion with {len(messages)} messages")
             
             # Extract system message if present
-            system_message = None
+            system_messages = []
             filtered_messages = []
             for msg in messages:
                 if msg["role"] == "system":
-                    system_message = msg["content"]
+                    system_messages.append({
+                        "type": "text",
+                        "text": msg["content"]
+                    })
                 else:
                     filtered_messages.append(msg)
             
-            async with self.client.messages.stream(
-                model=self.model,
-                messages=filtered_messages,
-                system=system_message,
-                temperature=temperature,
-                max_tokens=max_tokens,
+            # Build kwargs conditionally
+            api_kwargs = {
+                "model": self.model,
+                "messages": filtered_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
                 **kwargs
-            ) as stream:
+            }
+            if system_messages:
+                api_kwargs["system"] = system_messages
+            
+            async with self.client.messages.stream(**api_kwargs) as stream:
                 async for text in stream.text_stream:
                     yield text
             
