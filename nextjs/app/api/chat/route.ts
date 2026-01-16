@@ -15,16 +15,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Extract user info from token for internal API call
-    const token = request.cookies.get('token')?.value;
+    const token = request.cookies.get('auth-token')?.value;
     let userId = 'anonymous';
     
     if (token) {
-      try {
-        const decoded = verifyToken(token);
+      const decoded = verifyToken(token);
+      if (decoded) {
         userId = decoded.userId;
-      } catch (error) {
-        console.error('Token verification failed:', error);
+        console.log('Authenticated userId:', userId);
+      } else {
+        console.error('Token verification failed: invalid token');
       }
+    } else {
+      console.warn('No token found in cookies');
     }
 
     // Call Python Planning Agent API

@@ -6,8 +6,7 @@ from typing import Dict, Any, Optional
 from agents.base import BaseAgent
 from config.prompts import (
     PLANNING_SYSTEM_PROMPT, 
-    PLANNING_TASK_FORMAT_EXAMPLE,
-    PLANNING_CONVERSATION_EXAMPLES
+    PLANNING_TASK_FORMAT_EXAMPLE
 )
 from utils.logger import logger
 from utils.task_inserter import insert_tasks_to_db
@@ -16,8 +15,16 @@ from utils.task_inserter import insert_tasks_to_db
 class PlanningAgent(BaseAgent):
     """Agent for content planning and task generation"""
     
-    def __init__(self, model_client):
+    def __init__(self, model_client, enable_openai_tools: bool = True):
+        """
+        Initialize planning agent
+        
+        Args:
+            model_client: LLM client (OpenAI or Anthropic)
+            enable_openai_tools: Whether to enable tool usage for OpenAI models (default: True)
+        """
         super().__init__(model_client, "planning")
+        self.enable_openai_tools = enable_openai_tools
         
         # Define task insertion tool (Anthropic format)
         self.tools_anthropic = [
@@ -84,7 +91,7 @@ class PlanningAgent(BaseAgent):
                 "type": "function",
                 "function": {
                     "name": "insert_tasks_to_db",
-                    "description": "Insert generated tasks into the PostgreSQL database. Use this when you've created a set of tasks and are ready to save them to the database. The tasks will be marked as AI-generated and assigned TODO status.",
+                    "description": "Insert generated tasks into the PostgreSQL database. The tasks will be marked as AI-generated and assigned TODO status.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -141,10 +148,11 @@ class PlanningAgent(BaseAgent):
         ]
         
         # Initialize with system prompt
-        self.add_to_history("system", PLANNING_SYSTEM_PROMPT)
-        self.add_to_history("system", f"Task Format Example:\n{PLANNING_TASK_FORMAT_EXAMPLE}")
-        self.add_to_history("system", f"Conversation Examples:\n{PLANNING_CONVERSATION_EXAMPLES}")
-        self.add_to_history("system", "\n**CRITICAL REMINDER**: You have access to the insert_tasks_to_db tool. When you've created a task plan and the user confirms they like it (e.g., 'yes', 'looks great', 'sounds good', 'perfect'), you MUST immediately call the tool to save tasks. DO NOT just acknowledge - take action and call the tool!")
+        self.add_to_history("system", "Markdown supported. Try to format responses accordingly.")
+        #self.add_to_history("system", PLANNING_SYSTEM_PROMPT)
+        #self.add_to_history("system", f"Task Format Example:\n{PLANNING_TASK_FORMAT_EXAMPLE}")
+        #self.add_to_history("system", f"You are an expert in content creation and social media strategy.")
+        #self.add_to_history("system", "\n**CRITICAL REMINDER**: You have access to the insert_tasks_to_db tool. When you've created a task plan and the user confirms they like it (e.g., 'yes', 'looks great', 'sounds good', 'perfect'), you MUST immediately call the tool to save tasks. DO NOT just acknowledge - take action and call the tool!")
     
     async def generate_plan(
         self,
@@ -171,8 +179,8 @@ class PlanningAgent(BaseAgent):
             # Generate plan
             response = await self.model_client.generate_completion(
                 messages=self.conversation_history,
-                temperature=0.7,
-                max_tokens=2000
+                #temperature=0.7,
+                #max_tokens=2000
             )
             
             self.add_to_history("assistant", response)
@@ -202,7 +210,9 @@ class PlanningAgent(BaseAgent):
         Returns:
             Agent's response
         """
-        self.add_to_history("user", user_message)
+        # Only add user message if not already in history (from loaded conversation)
+        if not self.conversation_history or self.conversation_history[-1].get("content") != user_message:
+            self.add_to_history("user", user_message)
         
         try:
             # Check if Anthropic client
@@ -219,8 +229,8 @@ class PlanningAgent(BaseAgent):
                     
                     follow_up = await self.model_client.generate_completion(
                         messages=self.conversation_history,
-                        temperature=0.7,
-                        max_tokens=800
+                        #temperature=0.7,
+                        #max_tokens=800
                     )
                     
                     self.add_to_history("assistant", follow_up)
@@ -236,12 +246,31 @@ class PlanningAgent(BaseAgent):
                     return text_response
             # Check if OpenAI client
             elif hasattr(self.model_client, 'client') and hasattr(self.model_client.client, 'chat'):
-                response = await self._generate_with_tools_openai()
+                # Only use tools if enabled for OpenAI
+                if self.enable_openai_tools:
+                    response = await self._generate_with_tools_openai()
+                else:
+                    response = await self.model_client.generate_completion(
+                        messages=self.conversation_history,
+                        #temperature=0.7,
+                        #max_tokens=2000
+                    )
+                    # Create a mock response object matching OpenAI's structure
+                    class MockChoice:
+                        def __init__(self, content):
+                            self.message = type('obj', (object,), {
+                                'content': content,
+                                'tool_calls': None
+                            })()
+                    class MockResponse:
+                        def __init__(self, content):
+                            self.choices = [MockChoice(content)]
+                    response = MockResponse(response)
                 
                 message = response.choices[0].message
                 
-                # Handle tool calls
-                if message.tool_calls:
+                # Handle tool calls (only if tools were enabled)
+                if message.tool_calls and self.enable_openai_tools:
                     tool_results = await self._execute_tools_openai(message.tool_calls)
                     
                     # Add assistant message with tool calls to history
@@ -264,8 +293,8 @@ class PlanningAgent(BaseAgent):
                     # Get follow-up response
                     follow_up = await self.model_client.generate_completion(
                         messages=self.conversation_history,
-                        temperature=0.7,
-                        max_tokens=800
+                        #temperature=0.7,
+                        #max_tokens=800
                     )
                     
                     self.add_to_history("assistant", follow_up)
@@ -278,8 +307,8 @@ class PlanningAgent(BaseAgent):
                 # Fallback for clients without tool support
                 response = await self.model_client.generate_completion(
                     messages=self.conversation_history,
-                    temperature=0.7,
-                    max_tokens=800
+                    #temperature=0.7,
+                    #max_tokens=800
                 )
                 
                 self.add_to_history("assistant", response)
@@ -329,8 +358,8 @@ class PlanningAgent(BaseAgent):
                     # Get follow-up response
                     async for token in self.model_client.stream_completion(
                         messages=self.conversation_history,
-                        temperature=0.7,
-                        max_tokens=800
+                        #temperature=0.7,
+                        #max_tokens=800
                     ):
                         full_response += token
                         yield token
@@ -344,8 +373,8 @@ class PlanningAgent(BaseAgent):
                 # Fallback for non-Anthropic clients
                 async for token in self.model_client.stream_completion(
                     messages=self.conversation_history,
-                    temperature=0.7,
-                    max_tokens=800
+                    #temperature=0.7,
+                    #max_tokens=800
                 ):
                     full_response += token
                     yield token
@@ -372,20 +401,25 @@ class PlanningAgent(BaseAgent):
             messages=filtered_messages,
             system=system_message,
             tools=self.tools_anthropic,
-            temperature=0.7,
-            max_tokens=2000
+            #temperature=0.7,
+            #max_tokens=2000
         )
         
         return response
     
     async def _generate_with_tools_openai(self):
         """Generate response with tool support for OpenAI"""
-        response = await self.model_client.generate_completion(
-            messages=self.conversation_history,
-            temperature=0.7,
-            max_tokens=2000,
-            tools=self.tools_openai
-        )
+        # Only include tools if enabled
+        kwargs = {
+            "messages": self.conversation_history,
+            #"temperature": 0.7,
+            #"max_tokens": 2000
+        }
+        
+        if self.enable_openai_tools:
+            kwargs["tools"] = self.tools_openai
+        
+        response = await self.model_client.generate_completion(**kwargs)
         
         return response
     

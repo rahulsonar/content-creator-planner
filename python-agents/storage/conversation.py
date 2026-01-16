@@ -148,12 +148,23 @@ class ConversationStorage:
                 row = result.fetchone()
                 
                 if row:
+                    import json
+                    # Parse messages if it's a string
+                    messages = row[3]
+                    if isinstance(messages, str):
+                        messages = json.loads(messages)
+                    
+                    # Parse metadata if it's a string
+                    metadata = row[4]
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata) if metadata else {}
+                    
                     conversation = {
                         "id": row[0],
                         "userId": row[1],
                         "title": row[2],
-                        "messages": row[3],
-                        "metadata": row[4],
+                        "messages": messages,
+                        "metadata": metadata,
                         "createdAt": row[5].isoformat() if row[5] else None,
                         "updatedAt": row[6].isoformat() if row[6] else None
                     }
@@ -260,6 +271,41 @@ class ConversationStorage:
                 logger.info(f"Updated conversation {conversation_id} status to {status}")
         except Exception as e:
             logger.error(f"Error updating conversation status: {e}")
+            raise
+    
+    async def update_conversation_user(
+        self,
+        conversation_id: str,
+        user_id: str
+    ):
+        """
+        Update conversation userId (e.g., claim an anonymous conversation)
+        
+        Args:
+            conversation_id: Conversation identifier
+            user_id: New user ID to assign
+        """
+        try:
+            async for session in self.db.get_session():
+                query = text("""
+                    UPDATE "Conversation"
+                    SET "userId" = :userId,
+                        "updatedAt" = NOW()
+                    WHERE id = :conv_id
+                """)
+                
+                await session.execute(
+                    query,
+                    {
+                        "conv_id": conversation_id,
+                        "userId": user_id
+                    }
+                )
+                await session.commit()
+                
+                logger.info(f"Updated conversation {conversation_id} userId to {user_id}")
+        except Exception as e:
+            logger.error(f"Error updating conversation user: {e}")
             raise
     
     async def calculate_cost(
