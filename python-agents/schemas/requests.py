@@ -28,6 +28,30 @@ class TaskCreateRequest(BaseModel):
     userId: str
 
 
+class TaskUpdateRequest(BaseModel):
+    """Request to update a single task"""
+    id: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None  # TODO, IN_PROGRESS, REVIEW, BLOCKED, COMPLETED, CANCELLED
+    priority: Optional[str] = None  # LOW, MEDIUM, HIGH, URGENT
+    estimatedHours: Optional[float] = None
+    actualHours: Optional[float] = None
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+    dueDate: Optional[str] = None
+    completedAt: Optional[str] = None
+    assignedTo: Optional[str] = None
+    aiContext: Optional[str] = None
+    aiSuggestions: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class TaskBatchUpdateRequest(BaseModel):
+    """Request to update multiple tasks in batch"""
+    tasks: List[Dict[str, Any]]  # Each item must have "id" + optional update fields
+
+
 class ContextUpdateRequest(BaseModel):
     """Request to update user context"""
     channelName: Optional[str] = None

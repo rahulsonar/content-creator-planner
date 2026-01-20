@@ -2,7 +2,7 @@
 OpenAI Client Wrapper
 Handles communication with OpenAI API
 """
-from typing import List, Dict, AsyncGenerator
+from typing import List, Dict, AsyncGenerator, Optional
 from openai import AsyncOpenAI
 from config.settings import settings
 from utils.logger import logger
@@ -12,17 +12,21 @@ from utils.token_counter import count_tokens
 class OpenAIClient:
     """Wrapper for OpenAI API interactions"""
     
-    def __init__(self, model: str = "gpt-3.5-turbo"):
+    def __init__(self, model: str = "gpt-3.5-turbo", metadata: Optional[Dict[str, str]] = None):
         """
         Initialize OpenAI client
         
         Args:
             model: Model identifier (gpt-3.5-turbo, gpt-4, etc.)
+            metadata: Optional metadata dict to be sent with each API call
+                     Will appear in OpenAI platform logs and usage data
         """
+        # Initialize AsyncOpenAI client
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         self.model = model
         self.client_type = 'openai'
-        logger.info(f"Initialized OpenAI client with model: {model}")
+        self.metadata = metadata or {}
+        logger.info(f"Initialized OpenAI client with model: {model}, metadata: {list(self.metadata.keys())}")
     
     async def generate_completion(
         self,
@@ -55,6 +59,14 @@ class OpenAIClient:
                 #"max_tokens": max_tokens,
                 **kwargs
             }
+            
+            # Add metadata as extra headers if available
+            if self.metadata:
+                extra_headers = {}
+                for key, value in self.metadata.items():
+                    # Convert metadata to header-friendly format
+                    extra_headers[f"X-{key}"] = str(value)
+                params["extra_headers"] = extra_headers
             
             if tools:
                 params["tools"] = tools
@@ -98,14 +110,22 @@ class OpenAIClient:
         try:
             logger.debug(f"Starting streaming completion with {len(messages)} messages")
             
-            stream = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                #temperature=temperature,
-                #max_tokens=max_tokens,
-                stream=True,
+            params = {
+                "model": self.model,
+                "messages": messages,
+                "stream": True,
                 **kwargs
-            )
+            }
+            
+            # Add metadata as extra headers if available
+            if self.metadata:
+                extra_headers = {}
+                for key, value in self.metadata.items():
+                    # Convert metadata to header-friendly format
+                    extra_headers[f"X-{key}"] = str(value)
+                params["extra_headers"] = extra_headers
+            
+            stream = await self.client.chat.completions.create(**params)
             
             async for chunk in stream:
                 if chunk.choices[0].delta.content:
@@ -150,3 +170,13 @@ class OpenAIClient:
             True if tool calling is supported
         """
         return True
+    
+    def update_metadata(self, metadata: Dict[str, str]):
+        """
+        Update client metadata for next API calls
+        
+        Args:
+            metadata: Updated metadata dict to send with subsequent API requests
+        """
+        self.metadata = metadata
+        logger.info(f"Updated OpenAI client metadata: {list(metadata.keys())}")

@@ -29,7 +29,7 @@ Copy `.env.example` to `.env` and configure:
 # AI Configuration
 USE_DUMMY_AI=false          # Set to true for testing without API costs
 OPENAI_API_KEY=your_key     # Required when USE_DUMMY_AI=false
-ANTHROPIC_API_KEY=your_key  # Required when USE_DUMMY_AI=false
+
 
 # Security
 JWT_SECRET=your-secret-key

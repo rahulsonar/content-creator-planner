@@ -5,17 +5,18 @@ Selects appropriate AI model based on task type and context
 from typing import Literal
 from utils.logger import logger
 
-ModelType = Literal["gpt-3.5-turbo", "gpt-4", "claude-3.5-sonnet"]
+ModelType = Literal["gpt-3.5-turbo", "gpt-4", "gpt-5"]
 
 
 class ModelOrchestrator:
     """Orchestrates model selection based on task requirements"""
     
     # Model cost per 1M tokens (input / output)
+    # Note: GPT-5 pricing is estimated and subject to change
     MODEL_COSTS = {
         "gpt-3.5-turbo": (0.50, 1.50),
         "gpt-4": (10.00, 30.00),
-        "claude-3.5-sonnet": (3.00, 15.00),
+        "gpt-5": (15.00, 45.00),
     }
     
     @staticmethod
@@ -45,9 +46,9 @@ class ModelOrchestrator:
         if task_type == "onboarding_final":
             return "gpt-4"
         
-        # Planning with long context
+        # Planning with long context or high complexity
         if task_type == "planning" and context_length > 8000:
-            return "claude-3.5-sonnet"
+            return "gpt-5"
         
         # Planning with standard context
         if task_type == "planning":
@@ -112,14 +113,11 @@ class ModelOrchestrator:
         Returns:
             Recommended model (may be same or upgraded)
         """
-        # High error rate or low quality - upgrade
+        # High error rate or low quality - upgrade to GPT-4
         if error_rate > 0.2 or quality_score < 0.6:
             if current_model == "gpt-3.5-turbo":
                 logger.info("Upgrading from GPT-3.5 to GPT-4 due to quality issues")
                 return "gpt-4"
-            if current_model == "gpt-4":
-                logger.info("Upgrading from GPT-4 to Claude due to quality issues")
-                return "claude-3.5-sonnet"
         
         # Current model is performing well
         return current_model

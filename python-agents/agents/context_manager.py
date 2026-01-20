@@ -3,7 +3,7 @@ Context Manager Agent
 Manages user context history in structured markdown files
 """
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from agents.base import BaseAgent
 from config.prompts import CONTEXT_MANAGER_SYSTEM_PROMPT
@@ -15,7 +15,7 @@ from utils.user_context_manager import (
     list_user_context_files,
     ensure_user_context_dir
 )
-from storage.context_manager_log import ContextManagerLogger
+from storage.agent_call_log import agent_call_logger
 
 
 class ContextManagerAgent(BaseAgent):
@@ -32,53 +32,105 @@ class ContextManagerAgent(BaseAgent):
         super().__init__(model_client, "context_manager")
         self.current_user_id = None  # Will be set during process_message
         self.db_session = db_session
-        self.conversation_logger = ContextManagerLogger(db_session) if db_session else None
-        self.current_log_id = None  # Track current conversation log
-        
+        self._current_agent_call_log_id = None  # Track current agent call log
+
+        # Initialize metadata
+        self.metadata = {
+            "agent_name": "context_manager",
+            "agent_type": "context_management",
+            "conversation_id": None,
+            "user_id": None,
+            "session_id": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_activity_at": None,
+            "total_messages": 0,
+            "total_user_messages": 0,
+            "tool_calls_count": 0,
+            "tools_by_type": {},  # Track count per tool type
+            "enable_tools": True,  # Context manager always uses tools
+            "model_name": getattr(model_client, 'model', 'unknown'),
+            "files_created": 0,
+            "files_updated": 0,
+            "files_read": 0,
+            "agent_version": "1.0.0"
+        }
+
+        logger.info(f"ContextManagerAgent initialized: {self.get_metadata_summary()}")
+
         # Add system prompt to conversation history
         self.conversation_history = [
             {"role": "system", "content": CONTEXT_MANAGER_SYSTEM_PROMPT}
         ]
         
-        # Define context management tools for OpenAI
+        # Define unified context management tool with action parameter
         self.tools_openai = [
             {
                 "type": "function",
                 "function": {
-                    "name": "manage_user_context_files",
-                    "description": "Manage user context files in markdown format. Create or update the index file and section-specific files to organize user information systematically.",
+                    "name": "manage_context",
+                    "description": "Manage user context: save new information, request additional context, retrieve existing context, or list context files.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["create_index", "update_section", "read_context", "list_files"],
-                                "description": "Action to perform: create_index (create/update INDEX.md - filename defaults to INDEX.md if not provided), update_section (create/update section file - filename required), read_context (read existing files - filename required), list_files (list all context files)"
+                                "enum": ["save", "request", "retrieve", "list"],
+                                "description": "Context operation: 'save' (save new info), 'request' (ask for specific info), 'retrieve' (read context file), 'list' (list all files)"
                             },
-                            "user_id": {
+                            "summary": {
                                 "type": "string",
-                                "description": "User identifier for context storage"
+                                "description": "Information to save about the user (for 'save' action)"
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "Specific question about ADDITIONAL information not in cached context (for 'request' action)"
+                            },
+                            "reasoning": {
+                                "type": "string",
+                                "description": "Why additional context is needed (for 'request' action)"
                             },
                             "filename": {
                                 "type": "string",
-                                "description": "Filename for the context file (e.g., 'INDEX.md', 'profile.md', 'goals.md'). Optional for create_index (defaults to INDEX.md). Required for update_section and read_context actions."
-                            },
-                            "content": {
-                                "type": "string",
-                                "description": "Markdown content to write. Required for create_index and update_section actions."
-                            },
-                            "append": {
-                                "type": "boolean",
-                                "description": "If true, append content to existing file. If false, overwrite. Default: false",
-                                "default": False
+                                "description": "Filename to retrieve (e.g., 'INDEX.md', 'profile.md', 'goals.md') - for 'retrieve' action"
                             }
                         },
-                        "required": ["action", "user_id"]
+                        "required": ["action"]
                     }
                 }
             }
         ]
-    
+
+    def update_metadata(self, **kwargs):
+        """Update metadata fields and track last activity, also sync with model client"""
+        self.metadata.update(kwargs)
+        self.metadata["last_activity_at"] = datetime.now(timezone.utc).isoformat()
+        
+        # Sync metadata with OpenAI client for API logging
+        if hasattr(self.model_client, 'update_metadata'):
+            client_metadata = {
+                "conversation_id": self.metadata.get("conversation_id"),
+                "user_id": self.metadata.get("user_id"),
+                "session_id": self.metadata.get("session_id"),
+                "agent_name": self.metadata.get("agent_name")
+            }
+            # Remove None values to avoid setting empty headers
+            client_metadata = {k: v for k, v in client_metadata.items() if v is not None}
+            if client_metadata:
+                self.model_client.update_metadata(client_metadata)
+
+    def get_metadata(self) -> Dict[str, Any]:
+        """Get current metadata snapshot"""
+        return self.metadata.copy()
+
+    def get_metadata_summary(self) -> str:
+        """Get formatted metadata summary for logging"""
+        m = self.metadata
+        return (
+            f"agent={m['agent_name']}, conv={m['conversation_id']}, "
+            f"user={m['user_id']}, msgs={m['total_messages']}, "
+            f"tools={m['tool_calls_count']}, files={m['files_created']+m['files_updated']+m['files_read']}"
+        )
+
     async def process_message(
         self,
         user_message: str,
@@ -96,29 +148,48 @@ class ContextManagerAgent(BaseAgent):
         """
         if not user_context or "user_id" not in user_context:
             return "Error: user_id is required to manage context"
-        
+
         user_id = user_context["user_id"]
         logger.info(f"Context manager processing message for user_id: {user_id}")
-        
+
+        # Update metadata at start of message processing
+        self.update_metadata(
+            conversation_id=user_context.get('conversation_id'),
+            user_id=user_id,
+            session_id=user_context.get('session_id')
+        )
+
+        # Increment message counters
+        self.metadata["total_messages"] += 1
+        self.metadata["total_user_messages"] += 1
+
+        logger.info(f"Processing message: {self.get_metadata_summary()}")
+
         # Store user_id for tool execution
         self.current_user_id = user_id
         
-        # Create conversation log
-        self.current_log_id = str(uuid.uuid4())
-        if self.conversation_logger:
-            try:
-                await self.conversation_logger.create_log(
-                    conversation_id=self.current_log_id,
-                    user_id=user_id,
-                    user_message=user_message,
-                    conversation_link_id=user_context.get('conversation_id'),
-                    metadata={
-                        'model': getattr(self.model_client, 'model_name', 'unknown'),
-                        'agent_name': 'context_manager'
-                    }
-                )
-            except Exception as log_error:
-                logger.error(f"Failed to create conversation log: {log_error}")
+        # START AGENT CALL LOGGING
+        try:
+            self._current_agent_call_log_id = await agent_call_logger.start_agent_call(
+                user_id=user_id,
+                agent_name="context_manager",
+                model_name=self.metadata.get("model_name", "unknown"),
+                message_id=user_context.get('message_id') or agent_call_logger.generate_message_id(),
+                conversation_id=user_context.get('conversation_id'),
+                session_id=user_context.get('session_id'),
+                agent_type="context_management",
+                agent_version=self.metadata.get("agent_version", "1.0.0"),
+                input_message=user_message,
+                tools_enabled=True,
+                metadata={
+                    "conversation_history_length": len(self.conversation_history),
+                    "has_context": bool(user_context)
+                },
+                tags=["context_manager", "context_management"]
+            )
+            logger.info(f"Started agent call log: {self._current_agent_call_log_id}")
+        except Exception as e:
+            logger.error(f"Failed to start agent call logging: {e}")
         
         # Add user message with user_id context to history
         enhanced_message = f"[User ID: {user_id}]\n\n{user_message}"
@@ -136,32 +207,40 @@ class ContextManagerAgent(BaseAgent):
             # Add assistant response to history
             self.add_to_history("assistant", response)
             
-            # Update log with completion
-            if self.conversation_logger and self.current_log_id:
-                try:
-                    await self.conversation_logger.update_log(
-                        conversation_id=self.current_log_id,
-                        assistant_message=response,
-                        status='COMPLETED'
-                    )
-                except Exception as log_error:
-                    logger.error(f"Failed to update conversation log: {log_error}")
+            # COMPLETE AGENT CALL LOGGING
+            try:
+                await agent_call_logger.complete_agent_call(
+                    log_id=self._current_agent_call_log_id,
+                    output_message=response,
+                    metadata={
+                        "final_history_length": len(self.conversation_history),
+                        "files_created": self.metadata.get("files_created", 0),
+                        "files_updated": self.metadata.get("files_updated", 0),
+                        "files_read": self.metadata.get("files_read", 0)
+                    }
+                )
+                logger.info(f"Completed agent call log: {self._current_agent_call_log_id}")
+            except Exception as log_error:
+                logger.error(f"Failed to complete agent call logging: {log_error}")
             
             return response
             
         except Exception as e:
             logger.error(f"Error in context manager agent for user {user_id}: {e}")
             
-            # Log error
-            if self.conversation_logger and self.current_log_id:
-                try:
-                    await self.conversation_logger.update_log(
-                        conversation_id=self.current_log_id,
-                        status='FAILED',
-                        error_message=str(e)
-                    )
-                except Exception as log_error:
-                    logger.error(f"Failed to log error: {log_error}")
+            # FAIL AGENT CALL LOGGING
+            try:
+                import traceback
+                await agent_call_logger.fail_agent_call(
+                    log_id=self._current_agent_call_log_id,
+                    error=str(e),
+                    error_type="processing_error",
+                    stack_trace=traceback.format_exc(),
+                    metadata={"error_location": "process_message"}
+                )
+                logger.error(f"Failed agent call log: {self._current_agent_call_log_id}")
+            except Exception as log_error:
+                logger.error(f"Failed to log agent call failure: {log_error}")
             
             return f"I encountered an error while managing the context: {str(e)}"
     
@@ -182,8 +261,6 @@ class ContextManagerAgent(BaseAgent):
         # Generate response with tools
         response = await self.model_client.generate_completion(
             messages=self.conversation_history,
-            temperature=0.3,
-            max_tokens=2000,
             tools=self.tools_openai
         )
         
@@ -197,7 +274,7 @@ class ContextManagerAgent(BaseAgent):
                 tool_calls_log = []
                 tool_results_log = []
                 
-                # Log tool calls
+                # Log tool calls for legacy logging
                 for tc in message.tool_calls:
                     tool_calls_log.append({
                         'id': tc.id,
@@ -205,6 +282,20 @@ class ContextManagerAgent(BaseAgent):
                         'arguments': json.loads(tc.function.arguments),
                         'timestamp': datetime.utcnow().isoformat()
                     })
+                
+                # Log tool calls to agent_call_logger
+                tool_calls_data = [{
+                    "call_id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": json.loads(tc.function.arguments),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                } for tc in message.tool_calls]
+                
+                try:
+                    await agent_call_logger.update_tool_calls(self._current_agent_call_log_id, tool_calls_data)
+                    logger.info(f"Logged {len(tool_calls_data)} tool calls to agent_call_logger")
+                except Exception as e:
+                    logger.error(f"Failed to log tool calls to agent_call_logger: {e}")
                 
                 # Add assistant message with tool calls to history
                 self.add_to_history("assistant", {
@@ -245,23 +336,16 @@ class ContextManagerAgent(BaseAgent):
                     # Add tool result to history
                     self.add_to_history("tool", result, tool_call.id)
                 
-                # Update log with tool execution
-                if self.conversation_logger and self.current_log_id:
-                    try:
-                        await self.conversation_logger.update_log(
-                            conversation_id=self.current_log_id,
-                            tool_calls=tool_calls_log,
-                            tool_results=tool_results_log,
-                            status='IN_PROGRESS'
-                        )
-                    except Exception as log_error:
-                        logger.error(f"Failed to log tool execution: {log_error}")
+                # Log tool results to agent_call_logger
+                try:
+                    await agent_call_logger.update_tool_results(self._current_agent_call_log_id, tool_results_log)
+                    logger.info(f"Logged {len(tool_results_log)} tool results to agent_call_logger")
+                except Exception as e:
+                    logger.error(f"Failed to log tool results to agent_call_logger: {e}")
                 
                 # Get follow-up response after tool execution
                 follow_up = await self.model_client.generate_completion(
-                    messages=self.conversation_history,
-                    temperature=0.3,
-                    max_tokens=800
+                    messages=self.conversation_history
                 )
                 
                 # Handle follow-up response
@@ -270,11 +354,10 @@ class ContextManagerAgent(BaseAgent):
                 else:
                     final_response = follow_up
                 
-                self.add_to_history("assistant", final_response)
+                # Note: Don't add to history here - already added with tool_calls above
                 return final_response
             else:
                 # No tool calls, just return text
-                self.add_to_history("assistant", message.content)
                 return message.content
         
         # Plain text response fallback
@@ -283,25 +366,31 @@ class ContextManagerAgent(BaseAgent):
     async def _process_without_tools(self, user_id: str) -> str:
         """Process message without tool-calling (direct context management)"""
         response = await self.model_client.generate_completion(
-            messages=self.conversation_history,
-            temperature=0.3,
-            max_tokens=1500
+            messages=self.conversation_history
         )
         
         return response
     
     async def _execute_tool(self, tool_call: Dict[str, Any]) -> str:
         """Execute a context management tool call"""
+        # Increment tool calls counter
+        self.metadata["tool_calls_count"] += 1
+
         tool_name = tool_call.get("name")
         arguments = tool_call.get("arguments", {})
-        
-        if tool_name == "manage_user_context_files":
+
+        # Track tool usage by type
+        tools_by_type = self.metadata["tools_by_type"]
+        tools_by_type[tool_name] = tools_by_type.get(tool_name, 0) + 1
+
+        logger.info(f"Executing tool: {tool_name} (total: {tools_by_type[tool_name]})")
+
+        if tool_name == "manage_context":
             # Override user_id with the authenticated user_id from context
-            # This ensures we always use the correct user folder regardless of what the LLM provides
             if hasattr(self, 'current_user_id'):
                 arguments['user_id'] = self.current_user_id
                 logger.debug(f"Enforcing user_id={self.current_user_id} for tool call")
-            return await self._manage_context_files(**arguments)
+            return await self._handle_manage_context(**arguments)
         
         return f"Unknown tool: {tool_name}"
     
@@ -338,28 +427,64 @@ class ContextManagerAgent(BaseAgent):
             elif action == "read_context":
                 if not filename:
                     return "Error: filename is required for read_context action"
-                
+
+                # Track file read
+                self.metadata["files_read"] += 1
+
                 file_content = read_user_context(user_id, filename)
                 if file_content:
                     return f"Content of {filename}:\n{file_content}"
+                # Fallback: If INDEX.md is missing, search for other section files
+                if filename.upper() == "INDEX.MD":
+                    files = list_user_context_files(user_id)
+                    # Only consider .md files, skip INDEX.md
+                    section_files = [f for f in files if f.lower().endswith('.md') and f.lower() != 'index.md']
+                    if not section_files:
+                        return f"No information found about this topic. If Index.md does not exist, search in other relevant context files."
+                    aggregated = []
+                    for section_file in section_files:
+                        section_content = read_user_context(user_id, section_file)
+                        if section_content:
+                            aggregated.append(f"[{section_file}]:\n{section_content.strip()}\n")
+                    if aggregated:
+                        return "\n".join(aggregated)
+                    else:
+                        return f"No information found about this topic. If Index.md does not exist, search in other relevant context files."
                 return f"File {filename} not found for user {user_id}"
             
             elif action in ["create_index", "update_section"]:
                 # Auto-default filename to INDEX.md for create_index action
                 if action == "create_index" and not filename:
                     filename = "INDEX.md"
-                    logger.info(f"Auto-defaulting filename to INDEX.md for create_index action")
-                
+                    logger.info("Auto-defaulting filename to INDEX.md for create_index action")
+
                 if not filename or not content:
                     return f"Error: filename and content are required for {action} action"
-                
+
+                # Check if file exists to determine if this is create or update
+                from pathlib import Path
+                user_dir = Path(__file__).parent.parent / "user_context" / user_id
+                file_exists = (user_dir / filename).exists()
+
                 if append:
                     success = update_user_context(user_id, filename, content)
                     operation = "appended to"
+                    if success:
+                        self.metadata["files_updated"] += 1
                 else:
                     success = write_user_context(user_id, filename, content)
                     operation = "written to"
-                
+                    if success:
+                        if file_exists:
+                            self.metadata["files_updated"] += 1
+                        else:
+                            self.metadata["files_created"] += 1
+
+                logger.info(
+                    f"File operations - created: {self.metadata['files_created']}, "
+                    f"updated: {self.metadata['files_updated']}, read: {self.metadata['files_read']}"
+                )
+
                 if success:
                     return f"Successfully {operation} {filename} for user {user_id}"
                 return f"Failed to write to {filename} for user {user_id}"
@@ -370,6 +495,74 @@ class ContextManagerAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Error managing context files: {e}")
             return f"Error managing context files: {str(e)}"
+    
+    async def _handle_manage_context(
+        self,
+        action: str,
+        user_id: str,
+        summary: Optional[str] = None,
+        query: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        filename: Optional[str] = None
+    ) -> str:
+        """
+        Route manage_context actions to appropriate handlers
+        
+        Args:
+            action: Context operation (save, request, retrieve, list)
+            user_id: User identifier
+            summary: Information to save (for 'save' action)
+            query: Question for additional context (for 'request' action)
+            reasoning: Why additional context needed (for 'request' action)
+            filename: File to retrieve (for 'retrieve' action)
+            
+        Returns:
+            Result message
+        """
+        logger.info(f"Handle manage_context action: {action}")
+        
+        if action == "save":
+            # Save new user information to context file
+            if not summary:
+                return "Error: summary is required for 'save' action"
+            
+            content = f"# User Information\n\n{summary}\n\nUpdated: {datetime.now(timezone.utc).isoformat()}"
+            return await self._manage_context_files(
+                action="update_section",
+                user_id=user_id,
+                filename="user_info.md",
+                content=content,
+                append=True
+            )
+        
+        elif action == "request":
+            # Request additional context information
+            if not query:
+                return "Error: query is required for 'request' action"
+            
+            # Return a placeholder indicating that additional context should be requested
+            return f"Requesting additional context: {query}" + (f"\nReasoning: {reasoning}" if reasoning else "")
+        
+        elif action == "retrieve":
+            # Retrieve existing context file
+            if not filename:
+                filename = "INDEX.md"
+            
+            return await self._manage_context_files(
+                action="read_context",
+                user_id=user_id,
+                filename=filename
+            )
+        
+        elif action == "list":
+            # List all context files
+            return await self._manage_context_files(
+                action="list_files",
+                user_id=user_id
+            )
+        
+        else:
+            return f"Unknown action: {action}"
     
     def add_to_history(self, role: str, content, tool_call_id: str = None):
         """
