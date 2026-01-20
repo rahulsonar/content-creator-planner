@@ -6,18 +6,20 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from schemas.requests import (
     PlanningRequest,
-    ChatRequest
+    ChatRequest,
+    TaskUpdateRequest,
+    TaskBatchUpdateRequest
 )
 from schemas.responses import (
     PlanningResponse,
     ChatResponse
 )
 from api.middleware import verify_internal_request
-from agents import PlanningAgent, ModelOrchestrator
-from agents.context_manager import ContextManagerAgent
+from agents import PlanningAgent, ModelOrchestrator, ContextManagerAgent, UserTaskManagerAgent
 from models import OpenAIClient
 from storage.conversation import ConversationStorage
 from storage.database import db_manager
+from storage.agent_call_log import agent_call_logger
 from utils.logger import logger
 from config.settings import settings
 
@@ -136,6 +138,10 @@ async def planning_chat(
         if settings.USE_DUMMY_AI:
             return await _handle_dummy_chat(request, user_id, conversation_storage)
         
+        # Generate unique message ID for tracking this user message across all agent calls
+        message_id = agent_call_logger.generate_message_id()
+        logger.info(f"[ROUTES] Generated message_id: {message_id} for user {user_id}")
+        
         # Create or get conversation
         conversation_id = request.conversationId
         if not conversation_id:
@@ -166,20 +172,40 @@ async def planning_chat(
         # Select model
         model_name = ModelOrchestrator.select_model("planning")
         
-        # Initialize client and agent
-        client = OpenAIClient(model=model_name)
+        # Initialize client with metadata for OpenAI API tracking
+        metadata = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "agent_name": "planning"
+        }
+        client = OpenAIClient(model=model_name, metadata=metadata)
         
         # Create context manager agent with database session
-        context_client = OpenAIClient(model="gpt-4")
+        context_metadata = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "agent_name": "context_manager"
+        }
+        context_client = OpenAIClient(model="gpt-4", metadata=context_metadata)
+        
+        # Create task manager agent
+        task_metadata = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "agent_name": "task_manager"
+        }
+        task_client = OpenAIClient(model=model_name, metadata=task_metadata)
         
         # Get database session
-        async for db_session in db_manager.get_session():
+        async with db_manager.get_session() as db_session:
             context_manager = ContextManagerAgent(context_client, db_session=db_session)
+            task_manager = UserTaskManagerAgent(task_client)
         
             agent = PlanningAgent(
                 client, 
                 enable_openai_tools=settings.ENABLE_OPENAI_TOOLS, 
                 context_manager_agent=context_manager,
+                task_manager_agent=task_manager,
                 conversation_storage=conversation_storage
             )
             
@@ -187,10 +213,13 @@ async def planning_chat(
             if conversation_messages:
                 agent.load_conversation_history(conversation_messages)
             
-            # Load user context from storage and add user_id and conversation_id
+            # Load user context from storage and add tracking IDs
             user_context = request.context or {}
             user_context["user_id"] = user_id
             user_context["conversation_id"] = conversation_id
+            user_context["message_id"] = message_id  # Pass message_id for agent call tracking
+            
+            logger.info(f"[ROUTES] Processing message with context: user={user_id}, conv={conversation_id}, msg={message_id}")
             
             response = await agent.process_message(request.message, user_context)
         

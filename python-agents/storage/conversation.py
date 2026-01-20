@@ -35,7 +35,7 @@ class ConversationStorage:
             Conversation ID
         """
         try:
-            async for session in self.db.get_session():
+            async with self.db.get_session() as session:
                 # Insert conversation into database
                 query = text("""
                     INSERT INTO "Conversation" ("id", "userId", "title", "messages", "metadata", "createdAt", "updatedAt")
@@ -80,7 +80,7 @@ class ConversationStorage:
             tokens_used: Token count
         """
         try:
-            async for session in self.db.get_session():
+            async with self.db.get_session() as session:
                 import json
                 
                 # Build message object
@@ -134,7 +134,7 @@ class ConversationStorage:
             Conversation data or None
         """
         try:
-            async for session in self.db.get_session():
+            async with self.db.get_session() as session:
                 query = text("""
                     SELECT id, "userId", title, messages, metadata, "createdAt", "updatedAt"
                     FROM "Conversation"
@@ -194,7 +194,7 @@ class ConversationStorage:
             List of conversations
         """
         try:
-            async for session in self.db.get_session():
+            async with self.db.get_session() as session:
                 if conversation_type:
                     query = text("""
                         SELECT id, "userId", title, messages, metadata, "createdAt", "updatedAt"
@@ -249,7 +249,7 @@ class ConversationStorage:
             status: New status (active, completed, abandoned)
         """
         try:
-            async for session in self.db.get_session():
+            async with self.db.get_session() as session:
                 import json
                 
                 query = text("""
@@ -286,7 +286,7 @@ class ConversationStorage:
             user_id: New user ID to assign
         """
         try:
-            async for session in self.db.get_session():
+            async with self.db.get_session() as session:
                 query = text("""
                     UPDATE "Conversation"
                     SET "userId" = :userId,
@@ -322,7 +322,7 @@ class ConversationStorage:
             Estimated cost in USD
         """
         try:
-            async for session in self.db.get_session():
+            async with self.db.get_session() as session:
                 query = text("""
                     SELECT messages
                     FROM "Conversation"

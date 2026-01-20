@@ -53,12 +53,12 @@ def estimate_cost(
         Estimated cost in USD
     """
     # Cost per 1M tokens (input, output)
+    # Note: GPT-5 pricing is estimated and subject to change
     costs = {
         "gpt-3.5-turbo": (0.50, 1.50),
         "gpt-4": (10.00, 30.00),
         "gpt-4-turbo": (10.00, 30.00),
-        "claude-3-5-sonnet": (3.00, 15.00),
-        "claude-3.5-sonnet": (3.00, 15.00),
+        "gpt-5": (15.00, 45.00),  # Estimated pricing
     }
     
     if model not in costs:

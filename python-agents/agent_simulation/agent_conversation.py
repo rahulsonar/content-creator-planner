@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """
-Two-Agent Conversation Script
-Claude (user) and OpenAI (assistant) have a conversation based on a topic and instructions.
+DEPRECATED: This script is no longer in use.
+It was used for testing agent conversations using Claude/Anthropic models.
+Claude/Anthropic support has been removed from the project.
+
+Historical conversation data is preserved in data_archieved/ folder.
 """
+
+# DEPRECATED - DO NOT USE
+# This file is kept for historical reference only
+raise DeprecationWarning(
+    "agent_conversation.py is deprecated. "
+    "Claude/Anthropic model support has been removed from the project."
+)
+
 import asyncio
 import json
 import sys
@@ -14,7 +25,8 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from models.anthropic_client import AnthropicClient
+# DEPRECATED: AnthropicClient no longer exists
+# from models.anthropic_client import AnthropicClient
 from models.openai_client import OpenAIClient
 from dotenv import load_dotenv
 
@@ -129,9 +141,7 @@ CRITICAL: You MUST stay in character throughout the entire conversation. Remembe
         
         # Generate Claude's response
         response = await self.claude.generate_completion(
-            messages=claude_messages,
-            temperature=self.config.get("temperature", 0.7),
-            max_tokens=self.config.get("max_tokens", 800)
+            messages=claude_messages
         )
         
         return response
@@ -158,9 +168,7 @@ CRITICAL: You MUST stay in character throughout the entire conversation. Remembe
         
         # Generate OpenAI's response
         response = await self.openai.generate_completion(
-            messages=openai_messages,
-            temperature=self.config.get("temperature", 0.7),
-            max_tokens=self.config.get("max_tokens", 800)
+            messages=openai_messages
         )
         
         return response

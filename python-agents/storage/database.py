@@ -2,6 +2,7 @@
 Database Connection Module
 Handles PostgreSQL connection and session management
 """
+from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from config.settings import Settings
@@ -34,7 +35,8 @@ class DatabaseManager:
         
         logger.info("Database connection initialized")
     
-    async def get_session(self) -> AsyncSession:
+    @asynccontextmanager
+    async def get_session(self):
         """Get async database session"""
         async with self.async_session_maker() as session:
             yield session

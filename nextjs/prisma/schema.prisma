@@ -105,42 +105,71 @@ model UserContext {
   
 }
 
-model ContextManagerConversation {
-  id              String   @id @default(cuid())
-  userId          String
-  conversationId  String?  // Optional: link to parent Conversation if applicable
-  agentName       String   @default("context_manager")
+model AgentCallLog {
+  id                String   @id @default(cuid())
   
-  // Message content
-  userMessage     String   @db.Text
-  assistantMessage String?  @db.Text
+  // Identification
+  userId            String
+  conversationId    String?  // Link to parent conversation
+  messageId         String   // Unique ID for this user message (can be same across multiple agent calls)
+  sessionId         String?  // Optional: broader session identifier
   
-  // Tool execution logs
-  toolCalls       Json?    // Array of {name, arguments, timestamp}
-  toolResults     Json?    // Array of {tool_call_id, result, success, timestamp}
+  // Agent Information
+  agentName         String   // e.g., "planner", "task_manager", "context_manager"
+  agentType         String?  // e.g., "planning", "task_management", "context_extraction"
+  agentVersion      String?  // Track agent version for debugging
+  
+  // Model Information
+  modelName         String   // e.g., "gpt-4", "gpt-3.5-turbo"
+  modelProvider     String   @default("openai")
+  
+  // Call Details
+  inputMessage      String?  @db.Text  // The input/prompt sent to agent
+  outputMessage     String?  @db.Text  // The response from agent
+  
+  // Tool/Function Calls
+  toolsEnabled      Boolean  @default(false)
+  toolCalls         Json?    // Array of {name, arguments, timestamp, call_id}
+  toolResults       Json?    // Array of {call_id, result, success, error, timestamp}
+  
+  // Execution Metrics
+  status            AgentCallStatus @default(IN_PROGRESS)
+  startedAt         DateTime @default(now())
+  completedAt       DateTime?
+  durationMs        Int?     // Duration in milliseconds
+  
+  // Token Usage (if available)
+  promptTokens      Int?
+  completionTokens  Int?
+  totalTokens       Int?
+  
+  // Error Tracking
+  error             String?  @db.Text
+  errorType         String?  // e.g., "api_error", "tool_error", "validation_error"
+  stackTrace        String?  @db.Text
   
   // Metadata
-  metadata        Json?    // Additional context: model used, tokens, duration, etc.
-  status          ConversationStatus @default(COMPLETED)
-  errorMessage    String?  @db.Text
+  metadata          Json?    // Additional context: parent agent, delegation info, etc.
+  tags              String[] // For filtering/categorization
   
-  // Timestamps
-  startedAt       DateTime @default(now())
-  completedAt     DateTime?
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  // Audit
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
   
   @@index([userId])
   @@index([conversationId])
+  @@index([messageId])
   @@index([agentName])
+  @@index([status])
   @@index([startedAt])
+  @@index([sessionId])
 }
 
-enum ConversationStatus {
+enum AgentCallStatus {
   IN_PROGRESS
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 enum DependencyType {
