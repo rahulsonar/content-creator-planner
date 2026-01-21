@@ -8,44 +8,37 @@ from utils.logger import logger
 
 
 async def insert_tasks_to_db(
-    tasks_json: Dict[str, Any],
+    tasks: List[Dict[str, Any]],
     db_url: str = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
-) -> List[str]:
+) -> Dict[str, Any]:
     """
-    Insert tasks from planner agent JSON into database
+    Insert tasks into database
     
     Args:
-        tasks_json: Dict with "action": "create_tasks" and "tasks": [...]
+        tasks: List of task dictionaries to insert
         db_url: PostgreSQL connection string
         
     Returns:
-        List of created task IDs
+        Dict with success status and created task IDs
         
     Example:
-        tasks = {
-            "action": "create_tasks",
-            "tasks": [
-                {
-                    "title": "Research trending topics",
-                    "description": "Analyze top 20 videos...",
-                    "priority": "HIGH",
-                    "estimatedHours": 3,
-                    "researchNotes": "Use VidIQ/TubeBuddy...",
-                    "aiReasoning": "Trends boost discoverability...",
-                    "dependencies": []
-                }
-            ]
-        }
-        task_ids = await insert_tasks_to_db(tasks)
+        tasks = [
+            {
+                "title": "Research trending topics",
+                "description": "Analyze top 20 videos...",
+                "priority": "HIGH",
+                "estimatedHours": 3,
+                "researchNotes": "Use VidIQ/TubeBuddy...",
+                "aiReasoning": "Trends boost discoverability...",
+                "dependencies": []
+            }
+        ]
+        result = await insert_tasks_to_db(tasks)
+        # Returns: {"success": True, "created_ids": ["id1", "id2", ...]}
     """
-    if tasks_json.get("action") != "create_tasks":
-        logger.warning(f"Invalid action: {tasks_json.get('action')}")
-        return []
-    
-    tasks = tasks_json.get("tasks", [])
     if not tasks:
         logger.warning("No tasks to insert")
-        return []
+        return {"success": False, "error": "No tasks provided", "created_ids": []}
     
     created_ids = []
     
@@ -94,12 +87,34 @@ async def insert_tasks_to_db(
                 created_ids.append(task_id)
                 logger.info(f"Created task: {task_id} - {title}")
                 
+                # Insert notes if provided
+                notes = task.get("notes", [])
+                if notes and isinstance(notes, list):
+                    for note in notes:
+                        if isinstance(note, dict) and note.get("content"):
+                            note_query = """
+                                INSERT INTO "TaskNote" (
+                                    id, "taskId", content, "createdBy",
+                                    "createdAt", "updatedAt"
+                                ) VALUES (
+                                    gen_random_uuid()::text, $1, $2, $3,
+                                    NOW(), NOW()
+                                )
+                            """
+                            await conn.execute(
+                                note_query,
+                                task_id,
+                                note.get("content"),
+                                note.get("createdBy")
+                            )
+                            logger.info(f"Added note to task: {task_id}")
+                
         finally:
             await conn.close()
             
     except Exception as e:
-        logger.error(f"Error inserting tasks: {e}")
-        raise
+        logger.error(f"Error inserting tasks: {e}", exc_info=True)
+        return {"success": False, "error": str(e), "created_ids": []}
     
     logger.info(f"Successfully created {len(created_ids)} tasks")
-    return created_ids
+    return {"success": True, "created_ids": created_ids, "count": len(created_ids)}

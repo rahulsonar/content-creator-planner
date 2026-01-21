@@ -30,6 +30,8 @@ class UserTaskManagerAgent(BaseAgent):
         self._current_conversation_id = None
         self._current_message_id = None
         self._current_log_id = None  # Track current agent call log
+        self._tool_calls_log = []  # Track tool calls for logging
+        self._tool_results_log = []  # Track tool results for logging
 
         # Initialize metadata
         self.metadata = {
@@ -49,6 +51,7 @@ class UserTaskManagerAgent(BaseAgent):
             "tasks_created": 0,
             "tasks_updated": 0,
             "tasks_searched": 0,
+            "notes_added": 0,
             "agent_version": "1.0.0"
         }
 
@@ -60,13 +63,13 @@ class UserTaskManagerAgent(BaseAgent):
                 "type": "function",
                 "function": {
                     "name": "manage_tasks",
-                    "description": "Manage user's tasks with unified actions: create new tasks, search existing tasks, update task details, or get specific task information.",
+                    "description": "Manage user's tasks with unified actions: create new tasks (with optional notes), search existing tasks, update task details, add notes to existing tasks, or get specific task information.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["create", "search", "update", "get_one"],
+                                "enum": ["create", "search", "update", "get_one", "add_notes"],
                                 "description": "Task operation to perform"
                             },
                             # For 'create' action
@@ -105,6 +108,24 @@ class UserTaskManagerAgent(BaseAgent):
                                             "type": "array",
                                             "items": {"type": "string"},
                                             "description": "List of task titles this depends on"
+                                        },
+                                        "notes": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "content": {
+                                                        "type": "string",
+                                                        "description": "Note content"
+                                                    },
+                                                    "createdBy": {
+                                                        "type": "string",
+                                                        "description": "User ID who created the note (optional)"
+                                                    }
+                                                },
+                                                "required": ["content"]
+                                            },
+                                            "description": "Notes to attach to this task"
                                         }
                                     },
                                     "required": ["title", "description", "priority", "estimatedHours"]
@@ -188,7 +209,26 @@ class UserTaskManagerAgent(BaseAgent):
                             # For 'get_one' action
                             "task_id": {
                                 "type": "string",
-                                "description": "Task ID to retrieve (for 'get_one' action)"
+                                "description": "Task ID to retrieve (for 'get_one' action) or add notes to (for 'add_notes' action)"
+                            },
+                            # For 'add_notes' action
+                            "notes": {
+                                "type": "array",
+                                "description": "Array of notes to add to a task (for 'add_notes' action)",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "content": {
+                                            "type": "string",
+                                            "description": "Note content"
+                                        },
+                                        "createdBy": {
+                                            "type": "string",
+                                            "description": "User ID who created the note (optional)"
+                                        }
+                                    },
+                                    "required": ["content"]
+                                }
                             }
                         },
                         "required": ["action"]
@@ -199,6 +239,51 @@ class UserTaskManagerAgent(BaseAgent):
 
         # Initialize with system prompt
         self._initialize_system_prompt()
+
+    def _convert_anthropic_to_openai_format(self, anthropic_response):
+        """
+        Convert Anthropic tool response to OpenAI-style format for unified handling
+        
+        Args:
+            anthropic_response: Anthropic API response with tool_use blocks
+            
+        Returns:
+            Mock message object with OpenAI-style tool_calls attribute
+        """
+        class ToolCall:
+            def __init__(self, tool_id, tool_name, tool_input):
+                self.id = tool_id
+                self.type = "function"
+                
+                class Function:
+                    def __init__(self, name, arguments):
+                        self.name = name
+                        self.arguments = json.dumps(arguments)
+                
+                self.function = Function(tool_name, tool_input)
+        
+        class Message:
+            def __init__(self, content_blocks):
+                self.content = ""
+                self.tool_calls = []
+                
+                # Extract text and tool calls from Anthropic content blocks
+                for block in content_blocks:
+                    if block.type == "text":
+                        self.content += block.text
+                    elif block.type == "tool_use":
+                        tool_call = ToolCall(
+                            tool_id=block.id,
+                            tool_name=block.name,
+                            tool_input=block.input
+                        )
+                        self.tool_calls.append(tool_call)
+                
+                # Set to None if no tool calls (OpenAI convention)
+                if not self.tool_calls:
+                    self.tool_calls = None
+        
+        return Message(anthropic_response.content)
 
     def _initialize_system_prompt(self):
         """Initialize the agent with system prompts"""
@@ -272,6 +357,10 @@ class UserTaskManagerAgent(BaseAgent):
             self._current_conversation_id = user_context.get('conversation_id')
             self._current_message_id = user_context.get('message_id')
         
+        # Reset tool tracking for this message
+        self._tool_calls_log = []
+        self._tool_results_log = []
+        
         # START AGENT CALL LOGGING
         try:
             self._current_log_id = await agent_call_logger.start_agent_call(
@@ -307,30 +396,70 @@ class UserTaskManagerAgent(BaseAgent):
             while iteration < max_iterations:
                 iteration += 1
                 
-                # Check if OpenAI client with tools support
-                if hasattr(self.model_client, 'client') and hasattr(self.model_client.client, 'chat'):
+                # Generate response with tools based on client type
+                is_anthropic = hasattr(self.model_client, 'client_type') and self.model_client.client_type == 'anthropic'
+                is_openai = hasattr(self.model_client, 'client') and hasattr(self.model_client.client, 'chat')
+                
+                if is_openai:
+                    # OpenAI format
                     response = await self._generate_with_tools_openai()
+                    message = response.choices[0].message
+                elif is_anthropic:
+                    # Anthropic format - pass tools and get full response
+                    response = await self.model_client.generate_completion(
+                        messages=self.conversation_history,
+                        tools=self.tools_openai  # Will be converted to Anthropic format
+                    )
+                    
+                    # Check if Anthropic returned a tool use response
+                    if hasattr(response, 'stop_reason') and response.stop_reason == "tool_use":
+                        # Convert Anthropic response to OpenAI-style format for unified handling
+                        message = self._convert_anthropic_to_openai_format(response)
+                    else:
+                        # Regular text response
+                        content = ""
+                        if hasattr(response, 'content'):
+                            for block in response.content:
+                                if block.type == "text":
+                                    content += block.text
+                        else:
+                            content = str(response)
+                        
+                        class MockMessage:
+                            def __init__(self, content):
+                                self.content = content
+                                self.tool_calls = None
+                        message = MockMessage(content)
                 else:
+                    # Fallback for other clients (no tool support)
                     response = await self.model_client.generate_completion(
                         messages=self.conversation_history,
                     )
-                    class MockChoice:
+                    class MockMessage:
                         def __init__(self, content):
-                            self.message = type('obj', (object,), {
-                                'content': content,
-                                'tool_calls': None
-                            })()
-                    class MockResponse:
-                        def __init__(self, content):
-                            self.choices = [MockChoice(content)]
-                    response = MockResponse(response)
-                
-                message = response.choices[0].message
+                            self.content = content
+                            self.tool_calls = None
+                    message = MockMessage(response)
                 
                 # Handle tool calls
                 if message.tool_calls:
                     logger.info(f"Tool calls detected (iteration {iteration}): {[tc.function.name for tc in message.tool_calls]}")
+                    
+                    # Track tool calls for logging
+                    for tc in message.tool_calls:
+                        self._tool_calls_log.append({
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        })
+                    
                     tool_results = await self._execute_tools_openai(message.tool_calls)
+                    
+                    # Track tool results for logging
+                    self._tool_results_log.extend(tool_results)
                     
                     # Add assistant message with tool calls to history
                     self.add_to_history("assistant", {
@@ -362,12 +491,15 @@ class UserTaskManagerAgent(BaseAgent):
                         await agent_call_logger.complete_agent_call(
                             log_id=self._current_log_id,
                             output_message=final_response,
+                            tool_calls=self._tool_calls_log if self._tool_calls_log else None,
+                            tool_results=self._tool_results_log if self._tool_results_log else None,
                             metadata={
                                 "iterations": iteration,
                                 "final_history_length": len(self.conversation_history),
                                 "tasks_created": self.metadata.get("tasks_created", 0),
                                 "tasks_updated": self.metadata.get("tasks_updated", 0),
-                                "tasks_searched": self.metadata.get("tasks_searched", 0)
+                                "tasks_searched": self.metadata.get("tasks_searched", 0),
+                                "tool_calls_count": len(self._tool_calls_log)
                             }
                         )
                         logger.info(f"Completed agent call log: {self._current_log_id}")
@@ -385,9 +517,12 @@ class UserTaskManagerAgent(BaseAgent):
                 await agent_call_logger.complete_agent_call(
                     log_id=self._current_log_id,
                     output_message=final_msg,
+                    tool_calls=self._tool_calls_log if self._tool_calls_log else None,
+                    tool_results=self._tool_results_log if self._tool_results_log else None,
                     metadata={
                         "iterations": max_iterations,
-                        "max_iterations_reached": True
+                        "max_iterations_reached": True,
+                        "tool_calls_count": len(self._tool_calls_log)
                     }
                 )
             except Exception as log_error:
@@ -497,6 +632,8 @@ class UserTaskManagerAgent(BaseAgent):
             return await self._update_tasks(args.get("task_updates", []))
         elif action == "get_one":
             return await self._get_task(args.get("task_id", ""))
+        elif action == "add_notes":
+            return await self._add_notes(args.get("task_id", ""), args.get("notes", []))
         else:
             return f"Unknown action: {action}"
 
@@ -560,12 +697,22 @@ class UserTaskManagerAgent(BaseAgent):
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             
             query = f"""
-                SELECT id, title, description, status, priority, 
-                       "estimatedHours", "actualHours", "startDate", "endDate",
-                       "dueDate", "createdAt", "updatedAt"
-                FROM "Task"
+                SELECT t.id, t.title, t.description, t.status, t.priority, 
+                       t."estimatedHours", t."actualHours", t."startDate", t."endDate",
+                       t."dueDate", t."createdAt", t."updatedAt",
+                       json_agg(
+                           json_build_object(
+                               'id', tn.id,
+                               'content', tn.content,
+                               'createdBy', tn."createdBy",
+                               'createdAt', tn."createdAt"
+                           ) ORDER BY tn."createdAt" DESC
+                       ) FILTER (WHERE tn.id IS NOT NULL) as notes
+                FROM "Task" t
+                LEFT JOIN "TaskNote" tn ON t.id = tn."taskId"
                 WHERE {where_sql}
-                ORDER BY "createdAt" DESC
+                GROUP BY t.id
+                ORDER BY t."createdAt" DESC
                 LIMIT 100
             """
             
@@ -591,11 +738,21 @@ class UserTaskManagerAgent(BaseAgent):
                 logger.info("No tasks matched search criteria, returning all tasks")
                 fallback_occurred = True
                 all_tasks_query = """
-                    SELECT id, title, description, status, priority, 
-                           "estimatedHours", "actualHours", "startDate", "endDate",
-                           "dueDate", "createdAt", "updatedAt"
-                    FROM "Task"
-                    ORDER BY "createdAt" DESC
+                    SELECT t.id, t.title, t.description, t.status, t.priority, 
+                           t."estimatedHours", t."actualHours", t."startDate", t."endDate",
+                           t."dueDate", t."createdAt", t."updatedAt",
+                           json_agg(
+                               json_build_object(
+                                   'id', tn.id,
+                                   'content', tn.content,
+                                   'createdBy', tn."createdBy",
+                                   'createdAt', tn."createdAt"
+                               ) ORDER BY tn."createdAt" DESC
+                           ) FILTER (WHERE tn.id IS NOT NULL) as notes
+                    FROM "Task" t
+                    LEFT JOIN "TaskNote" tn ON t.id = tn."taskId"
+                    GROUP BY t.id
+                    ORDER BY t."createdAt" DESC
                     LIMIT 100
                 """
                 rows = await conn.fetch(all_tasks_query)
@@ -612,7 +769,22 @@ class UserTaskManagerAgent(BaseAgent):
                 title = row['title']
                 status = row['status']
                 priority = row['priority']
-                summary += f"  • [{status}] {title} (Priority: {priority}, ID: {task_id})\n"
+                
+                # Safely count notes with type checking
+                notes_count = 0
+                if row['notes']:
+                    notes = row['notes']
+                    if isinstance(notes, str):
+                        try:
+                            notes = json.loads(notes)
+                            notes_count = len(notes) if isinstance(notes, list) else 0
+                        except json.JSONDecodeError:
+                            notes_count = 0
+                    elif isinstance(notes, list):
+                        notes_count = len(notes)
+                
+                notes_suffix = f" [{notes_count} notes]" if notes_count > 0 else ""
+                summary += f"  • [{status}] {title} (Priority: {priority}, ID: {task_id}){notes_suffix}\n"
             
             if len(rows) > 10:
                 summary += f"  ... and {len(rows) - 10} more tasks"
@@ -675,20 +847,61 @@ class UserTaskManagerAgent(BaseAgent):
             conn = await asyncpg.connect(db_url)
             
             query = """
-                SELECT id, title, description, status, priority, 
-                       "estimatedHours", "actualHours", "startDate", "endDate",
-                       "dueDate", "createdAt", "updatedAt"
-                FROM "Task"
-                WHERE id = $1
+                SELECT t.id, t.title, t.description, t.status, t.priority, 
+                       t."estimatedHours", t."actualHours", t."startDate", t."endDate",
+                       t."dueDate", t."createdAt", t."updatedAt",
+                       json_agg(
+                           json_build_object(
+                               'id', tn.id,
+                               'content', tn.content,
+                               'createdBy', tn."createdBy",
+                               'createdAt', tn."createdAt"
+                           ) ORDER BY tn."createdAt" DESC
+                       ) FILTER (WHERE tn.id IS NOT NULL) as notes
+                FROM "Task" t
+                LEFT JOIN "TaskNote" tn ON t.id = tn."taskId"
+                WHERE t.id = $1
+                GROUP BY t.id
             """
             
+            logger.info(f"Fetching task with ID: {task_id}")
             row = await conn.fetchrow(query, task_id)
             
             if not row:
+                logger.warning(f"Task not found: {task_id}")
                 return f"Task {task_id} not found"
             
-            description = row['description'] or ""
+            # Safely extract values with type checking
+            description = str(row['description'] or "")
             desc_preview = description[:100] + "..." if len(description) > 100 else description
+            
+            # Format notes if present
+            notes_text = ""
+            if row['notes']:
+                # Parse notes if they're a JSON string
+                notes = row['notes']
+                if isinstance(notes, str):
+                    try:
+                        notes = json.loads(notes)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse notes JSON: {notes}")
+                        notes = []
+                
+                if notes:
+                    notes_text = f"\n  • Notes ({len(notes)}):"
+                    for note in notes[:3]:  # Show first 3 notes
+                        # Handle both dict and string cases
+                        if isinstance(note, dict):
+                            note_content = str(note.get('content', ''))
+                        elif isinstance(note, str):
+                            note_content = note
+                        else:
+                            note_content = str(note)
+                        
+                        note_preview = note_content[:80] + "..." if len(note_content) > 80 else note_content
+                        notes_text += f"\n    - {note_preview}"
+                    if len(notes) > 3:
+                        notes_text += f"\n    ... and {len(notes) - 3} more notes"
             
             summary = f"""Task Details:
   • ID: {row['id']}
@@ -697,13 +910,71 @@ class UserTaskManagerAgent(BaseAgent):
   • Priority: {row['priority']}
   • Estimated: {row['estimatedHours']}h
   • Actual: {row['actualHours']}h
-  • Description: {desc_preview}"""
+  • Description: {desc_preview}{notes_text}"""
             
+            logger.info(f"Successfully retrieved task: {task_id}")
             return summary
             
         except Exception as e:
-            logger.error(f"Error fetching task: {e}", exc_info=True)
+            logger.error(f"Error fetching task {task_id}: {e}", exc_info=True)
             return f"Error retrieving task: {str(e)}"
+        finally:
+            if conn:
+                await conn.close()
+
+    async def _add_notes(self, task_id: str, notes: List[Dict[str, Any]]) -> str:
+        """Add notes to an existing task"""
+        import asyncpg
+        from config.settings import settings
+        
+        if not task_id:
+            return "Error: task_id is required"
+        
+        if not notes:
+            return "Error: at least one note is required"
+        
+        conn = None
+        try:
+            # Connect to database
+            db_url = settings.DATABASE_URL
+            conn = await asyncpg.connect(db_url)
+            
+            # Verify task exists
+            task_check = await conn.fetchval('SELECT id FROM "Task" WHERE id = $1', task_id)
+            if not task_check:
+                return f"Task {task_id} not found"
+            
+            # Insert notes
+            notes_added = 0
+            for note in notes:
+                if isinstance(note, dict) and note.get("content"):
+                    note_query = """
+                        INSERT INTO "TaskNote" (
+                            id, "taskId", content, "createdBy",
+                            "createdAt", "updatedAt"
+                        ) VALUES (
+                            gen_random_uuid()::text, $1, $2, $3,
+                            NOW(), NOW()
+                        )
+                    """
+                    await conn.execute(
+                        note_query,
+                        task_id,
+                        note.get("content"),
+                        note.get("createdBy")
+                    )
+                    notes_added += 1
+                    logger.info(f"Added note to task: {task_id}")
+            
+            self.metadata["notes_added"] += notes_added
+            
+            summary = f"✓ Added {notes_added} note(s) to task {task_id[:8]}..."
+            logger.info(summary)
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Error adding notes to task {task_id}: {e}", exc_info=True)
+            return f"✗ Error adding notes: {str(e)}"
         finally:
             if conn:
                 await conn.close()

@@ -24,6 +24,12 @@ export default function AppLayout({
               <Link href="/chat" className="hover:bg-gray-700 px-3 py-2 rounded-md text-sm font-medium transition-colors">
                 AI Chat
               </Link>
+              <Link href="/conversations" className="hover:bg-gray-700 px-3 py-2 rounded-md text-sm font-medium transition-colors">
+                Conversations
+              </Link>
+              <Link href="/agent-logs" className="hover:bg-gray-700 px-3 py-2 rounded-md text-sm font-medium transition-colors">
+                Agent Logs
+              </Link>
             </div>
             <div>
               <LogoutButton />

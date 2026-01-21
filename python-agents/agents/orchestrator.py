@@ -1,73 +1,56 @@
 """
 Model Orchestrator
-Selects appropriate AI model based on task type and context
+Retrieves configured models from environment and provides cost utilities
 """
-from typing import Literal
+from typing import Dict, Tuple
 from utils.logger import logger
-
-ModelType = Literal["gpt-3.5-turbo", "gpt-4", "gpt-5"]
+from config.settings import settings
 
 
 class ModelOrchestrator:
-    """Orchestrates model selection based on task requirements"""
+    """Orchestrates model configuration and cost tracking"""
     
     # Model cost per 1M tokens (input / output)
-    # Note: GPT-5 pricing is estimated and subject to change
-    MODEL_COSTS = {
+    MODEL_COSTS: Dict[str, Tuple[float, float]] = {
         "gpt-3.5-turbo": (0.50, 1.50),
         "gpt-4": (10.00, 30.00),
         "gpt-5": (15.00, 45.00),
+        "claude-sonnet-4.5": (3.00, 15.00),
+        "claude-opus-4": (15.00, 75.00),
     }
     
     @staticmethod
-    def select_model(
-        task_type: str,
-        context_length: int = 0,
-        complexity: str = "medium"
-    ) -> ModelType:
+    def get_model_for_agent(agent_type: str) -> str:
         """
-        Select appropriate model based on task characteristics
+        Get the configured model for an agent from environment
         
         Args:
-            task_type: Type of task (onboarding_initial, onboarding_final, planning, chat)
-            context_length: Length of context in tokens
-            complexity: Task complexity (low, medium, high)
+            agent_type: Type of agent (planning, task_manager, context_manager)
             
         Returns:
-            Selected model identifier
+            Model name from env configuration
+            
+        Raises:
+            ValueError: If agent_type is not recognized
         """
-        logger.info(f"Selecting model for task_type={task_type}, context_length={context_length}, complexity={complexity}")
+        # Map agent types to env settings
+        env_mapping = {
+            "planning": settings.PLANNER_MODEL,
+            "task_manager": settings.TASK_MANAGER_MODEL,
+            "context_manager": settings.CONTEXT_MANAGER_MODEL,
+        }
         
-        # Onboarding - start with cheaper model
-        if task_type == "onboarding_initial":
-            return "gpt-3.5-turbo"
+        configured_model = env_mapping.get(agent_type)
         
-        # Onboarding - final synthesis requires nuance
-        if task_type == "onboarding_final":
-            return "gpt-4"
+        if not configured_model:
+            raise ValueError(f"No model configured for agent type: {agent_type}")
         
-        # Planning with long context or high complexity
-        if task_type == "planning" and context_length > 8000:
-            return "gpt-5"
-        
-        # Planning with standard context
-        if task_type == "planning":
-            return "gpt-5"
-        
-        # High complexity tasks
-        if complexity == "high":
-            return "gpt-5"
-        
-        # General chat - use efficient model
-        if task_type == "chat":
-            return "gpt-3.5-turbo"
-        
-        # Default to cost-effective option
-        return "gpt-3.5-turbo"
+        logger.info(f"Using configured model for {agent_type}: {configured_model}")
+        return configured_model
     
     @staticmethod
     def calculate_cost(
-        model: ModelType,
+        model: str,
         input_tokens: int,
         output_tokens: int
     ) -> float:
@@ -83,7 +66,7 @@ class ModelOrchestrator:
             Estimated cost in USD
         """
         if model not in ModelOrchestrator.MODEL_COSTS:
-            logger.warning(f"Unknown model: {model}, using default cost")
+            logger.warning(f"Unknown model: {model}, cannot calculate cost")
             return 0.0
         
         input_cost_per_m, output_cost_per_m = ModelOrchestrator.MODEL_COSTS[model]
@@ -95,29 +78,3 @@ class ModelOrchestrator:
         
         logger.debug(f"Cost calculation: {model} = ${total_cost:.6f}")
         return total_cost
-    
-    @staticmethod
-    def should_upgrade_model(
-        current_model: ModelType,
-        error_rate: float,
-        quality_score: float
-    ) -> ModelType:
-        """
-        Determine if model should be upgraded for better quality
-        
-        Args:
-            current_model: Current model in use
-            error_rate: Recent error rate (0-1)
-            quality_score: Quality assessment score (0-1)
-            
-        Returns:
-            Recommended model (may be same or upgraded)
-        """
-        # High error rate or low quality - upgrade to GPT-4
-        if error_rate > 0.2 or quality_score < 0.6:
-            if current_model == "gpt-3.5-turbo":
-                logger.info("Upgrading from GPT-3.5 to GPT-4 due to quality issues")
-                return "gpt-4"
-        
-        # Current model is performing well
-        return current_model

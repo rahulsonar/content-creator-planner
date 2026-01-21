@@ -21,6 +21,14 @@ import { CSS } from '@dnd-kit/utilities';
 
 import { TaskStatus, Priority } from '@prisma/client';
 
+interface TaskNote {
+  id: string;
+  content: string;
+  createdBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface Task {
   id: string;
   title: string;
@@ -37,6 +45,7 @@ interface Task {
   actualHours?: number | null;
   parentId?: string | null;
   subtasks?: Task[];
+  notes?: TaskNote[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -250,6 +259,29 @@ function TaskModal({ task, onClose }: { task: Task | null; onClose: () => void }
             </div>
           )}
 
+          {task.notes && task.notes.length > 0 && (
+            <div>
+              <h4 className="font-semibold text-gray-700 mb-2">Notes ({task.notes.length})</h4>
+              <div className="space-y-3">
+                {task.notes.map((note) => (
+                  <div key={note.id} className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <p className="text-gray-700 whitespace-pre-wrap mb-2">{note.content}</p>
+                    <div className="text-xs text-gray-500 flex items-center gap-3">
+                      {note.createdBy && <span>By: {note.createdBy}</span>}
+                      <span>{new Date(note.createdAt).toLocaleString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {(task.createdAt || task.updatedAt) && (
             <div className="border-t pt-4 text-xs text-gray-500 space-y-1">
               {task.createdAt && <p>Created: {formatDate(task.createdAt)}</p>}
@@ -289,6 +321,8 @@ export default function KanbanPage() {
   const [columns, setColumns] = useState<Column[]>(
     statusColumns.map((col) => ({ ...col, tasks: [] }))
   );
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [loading, setLoading] = useState(true);
@@ -299,6 +333,8 @@ export default function KanbanPage() {
       try {
         const response = await fetch('/api/tasks');
         const tasks: Task[] = await response.json();
+        
+        setAllTasks(tasks);
         
         const columnsWithTasks = statusColumns.map((col) => ({
           ...col,
@@ -315,6 +351,33 @@ export default function KanbanPage() {
 
     fetchTasks();
   }, []);
+
+  // Filter tasks based on search query
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      // If no search query, show all tasks
+      const columnsWithTasks = statusColumns.map((col) => ({
+        ...col,
+        tasks: allTasks.filter((task) => task.status === col.id),
+      }));
+      setColumns(columnsWithTasks);
+    } else {
+      // Filter tasks by ID, title, or description
+      const query = searchQuery.toLowerCase();
+      const filteredTasks = allTasks.filter((task) => {
+        const matchesId = task.id.toLowerCase().includes(query);
+        const matchesTitle = task.title.toLowerCase().includes(query);
+        const matchesDescription = task.description?.toLowerCase().includes(query) || false;
+        return matchesId || matchesTitle || matchesDescription;
+      });
+
+      const columnsWithTasks = statusColumns.map((col) => ({
+        ...col,
+        tasks: filteredTasks.filter((task) => task.status === col.id),
+      }));
+      setColumns(columnsWithTasks);
+    }
+  }, [searchQuery, allTasks]);
 
   const handleTaskClick = async (taskId: string) => {
     setLoadingTask(true);
@@ -449,6 +512,42 @@ export default function KanbanPage() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 p-8">
       <div className="max-w-7xl mx-auto">
         <h1 className="text-4xl font-bold text-gray-900 mb-8">Kanban Board</h1>
+        
+        {/* Search Box */}
+        <div className="mb-6">
+          <div className="relative max-w-md">
+            <input
+              type="text"
+              placeholder="Search by task ID, title, or description..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                title="Clear search"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+            {!searchQuery && (
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+            )}
+          </div>
+          {searchQuery && (
+            <p className="mt-2 text-sm text-gray-600">
+              Showing {columns.reduce((sum, col) => sum + col.tasks.length, 0)} of {allTasks.length} tasks
+            </p>
+          )}
+        </div>
         
         <DndContext
           sensors={sensors}

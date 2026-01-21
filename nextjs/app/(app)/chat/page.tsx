@@ -26,6 +26,8 @@ function ChatContent() {
   const [isLoading, setIsLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  console.log('ChatContent component rendered');
+
   useEffect(() => {
     setMounted(true);
   }, []);

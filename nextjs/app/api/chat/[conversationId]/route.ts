@@ -38,7 +38,6 @@ export async function GET(
         { status: 404 }
       );
     }
-    console.log('Fetched conversation:', conversation);
 
     // Verify user has access to this conversation
     // Allow access if: user is anonymous OR user owns the conversation

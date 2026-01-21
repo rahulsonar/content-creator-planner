@@ -4,6 +4,7 @@ Generates content project plans and task breakdowns
 """
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
+import asyncio
 import json
 import traceback
 from agents.base import BaseAgent
@@ -17,7 +18,7 @@ from storage.agent_call_log import agent_call_logger
 class PlanningAgent(BaseAgent):
     """Agent for content planning and task generation"""
     
-    def __init__(self, model_client, enable_openai_tools: bool = True, context_manager_agent=None, task_manager_agent=None, conversation_storage=None):
+    def __init__(self, model_client, enable_openai_tools: bool = True, context_manager_agent=None, task_manager_agent=None, conversation_storage=None, redis_client=None):
         """
         Initialize planning agent with tool support for OpenAI.
         
@@ -27,12 +28,14 @@ class PlanningAgent(BaseAgent):
             context_manager_agent: Context manager agent instance for saving user context
             task_manager_agent: Task manager agent instance for delegating task operations
             conversation_storage: Conversation storage instance for checking conversation history
+            redis_client: Redis client for temporary storage of intermediate data
         """
         super().__init__(model_client, "planning")
         self.enable_openai_tools = enable_openai_tools
         self.context_manager_agent = context_manager_agent
         self.task_manager_agent = task_manager_agent
         self.conversation_storage = conversation_storage
+        self.redis_client = redis_client
         self.is_first_conversation = False
         self._context_cached = False  # Track if context already cached in this session
         self._current_user_id = None
@@ -69,13 +72,13 @@ class PlanningAgent(BaseAgent):
                 "type": "function",
                 "function": {
                     "name": "manage_tasks",
-                    "description": "Delegate task management operations to the UserTaskManager agent. Provide a clear natural language request describing what task operation you need (create, search, update, retrieve, or any other task-related operation).",
+                    "description": "Delegate task management operations to the UserTaskManager agent. Supports: creating tasks (with initial notes), searching tasks, updating task fields, adding notes to existing tasks, and retrieving task details. Use 'add notes' for appending notes to tasks.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "request": {
                                 "type": "string",
-                                "description": "Natural language request describing the task operation. Examples: 'Create 5 tasks for video production', 'Search for tasks related to editing', 'Update task X to completed status', 'Get details of task with ID Y'"
+                                "description": "Natural language request describing the task operation. Examples: 'Create 5 tasks for video production', 'Search for tasks about editing', 'Update task X status to completed', 'Add a note to task Y saying...', 'Get task Z details'"
                             }
                         },
                         "required": ["request"]
@@ -113,6 +116,36 @@ class PlanningAgent(BaseAgent):
                             }
                         },
                         "required": ["action"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "redis_storage",
+                    "description": "Store and retrieve temporary data using Redis key-value storage. Use this to save intermediate planning information, task lists, draft plans, or any other data you need to track during planning. Data can have optional TTL (time-to-live) for automatic expiration.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {
+                                "type": "string",
+                                "enum": ["set", "get", "delete", "exists"],
+                                "description": "Storage operation: 'set' (save data), 'get' (retrieve data), 'delete' (remove data), 'exists' (check if key exists)"
+                            },
+                            "key": {
+                                "type": "string",
+                                "description": "Storage key name. Use descriptive keys like 'planner:draft_plan', 'planner:task_list', etc. Will be automatically prefixed with user_id."
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "Value to store (for 'set' operation). Can be any JSON-serializable data - string, number, object, or array."
+                            },
+                            "ttl": {
+                                "type": "integer",
+                                "description": "Time-to-live in seconds (for 'set' operation). Default: 3600 (1 hour). Data will automatically expire after this period."
+                            }
+                        },
+                        "required": ["operation", "key"]
                     }
                 }
             }
@@ -197,6 +230,10 @@ class PlanningAgent(BaseAgent):
             self._current_user_id = user_context['user_id']
             self._current_conversation_id = user_context.get('conversation_id')
             self._current_message_id = user_context.get('message_id')
+        
+        # Reset tool tracking for this message
+        self._tool_calls_log = []
+        self._tool_results_log = []
         
         # START AGENT CALL LOGGING
         try:
@@ -294,7 +331,17 @@ class PlanningAgent(BaseAgent):
                 # Handle tool calls (only if tools were enabled)
                 if message.tool_calls and self.enable_openai_tools:
                     logger.info(f"Tool calls detected: {[tc.function.name for tc in message.tool_calls]}")
-                    tool_results = await self._execute_tools_openai(message.tool_calls)
+                    
+                    # Track tool calls for logging
+                    for tc in message.tool_calls:
+                        self._tool_calls_log.append({
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        })
                     
                     # Add assistant message with tool calls to history
                     self.add_to_history("assistant", {
@@ -309,24 +356,70 @@ class PlanningAgent(BaseAgent):
                         } for tc in message.tool_calls]
                     })
                     
-                    # Add tool results
+                    # Execute tools (this blocks until all tools complete)
+                    # Log what we're executing
+                    tool_names = [tc.function.name for tc in message.tool_calls]
+                    logger.info(f"Executing {len(message.tool_calls)} tools: {', '.join(tool_names)}...")
+                    tool_results = await self._execute_tools_openai(message.tool_calls)
+                    logger.info(f"All {len(message.tool_calls)} tools completed")
+                    
+                    # Track tool results for logging
+                    self._tool_results_log.extend(tool_results)
+                    
+                    # Add tool results (MUST immediately follow assistant message with tool_calls)
                     for tool_call, result in zip(message.tool_calls, tool_results):
                         self.add_to_history("tool", result, tool_call.id)
                     
-                    # Get follow-up response
-                    follow_up = await self.model_client.generate_completion(
-                        messages=self.conversation_history,
+                    # Now add system message after tool results (optional, for guidance)
+                    self.add_to_history("system",
+                        f"All {len(tool_results)} tool(s) have finished executing. "
+                        f"Review the tool results above and generate your final response based on these results."
                     )
                     
-                    self.add_to_history("assistant", follow_up)
+                    # Get follow-up response WITH tools context
+                    # Prepare tools for follow-up (filter if needed)
+                    tools = self.tools_openai
+                    if self.is_first_conversation:
+                        tools = [tool for tool in self.tools_openai 
+                                if tool["function"]["name"] != "request_user_context"]
+                    
+                    follow_up_response = await self.model_client.generate_completion(
+                        messages=self.conversation_history,
+                        tools=tools,
+                    )
+                    
+                    # Extract text content from response (handle both string and ChatCompletion object)
+                    if isinstance(follow_up_response, str):
+                        follow_up_text = follow_up_response
+                    else:
+                        # ChatCompletion object - extract content
+                        follow_up_text = follow_up_response.choices[0].message.content
+                    
+                    # Handle null/empty responses (can happen after timeouts)
+                    if not follow_up_text or follow_up_text.strip() == "":
+                        logger.warning(f"[PLANNER] Empty follow-up response detected. Tool results: {[str(r)[:100] for r in tool_results]}")
+                        # Check if any tool had a timeout
+                        has_timeout = any("TOOL TIMEOUT" in str(r) for r in tool_results)
+                        if has_timeout:
+                            follow_up_text = (
+                                "The task management operation is taking longer than expected and may still be processing in the background. "
+                                "You can check the task list to see if changes have been applied, or try a more specific request. "
+                                "For large operations, consider breaking them into smaller batches."
+                            )
+                        else:
+                            follow_up_text = "I've completed processing your request. Please let me know if you need anything else."
+                    
+                    self.add_to_history("assistant", follow_up_text)
                     
                     # COMPLETE AGENT CALL LOGGING
                     try:
                         await agent_call_logger.complete_agent_call(
                             log_id=self._current_log_id,
-                            output_message=follow_up,
+                            output_message=follow_up_text,
+                            tool_calls=self._tool_calls_log if self._tool_calls_log else None,
+                            tool_results=self._tool_results_log if self._tool_results_log else None,
                             metadata={
-                                "tool_calls_made": len(message.tool_calls) if message.tool_calls else 0,
+                                "tool_calls_made": len(self._tool_calls_log),
                                 "is_first_conversation": self.is_first_conversation,
                                 "context_cached": self._context_cached,
                                 "final_history_length": len(self.conversation_history)
@@ -336,7 +429,7 @@ class PlanningAgent(BaseAgent):
                     except Exception as log_error:
                         logger.error(f"[PLANNER] Failed to complete agent call logging: {log_error}")
                     
-                    return follow_up
+                    return follow_up_text
                 else:
                     # Regular text response
                     self.add_to_history("assistant", message.content)
@@ -346,6 +439,8 @@ class PlanningAgent(BaseAgent):
                         await agent_call_logger.complete_agent_call(
                             log_id=self._current_log_id,
                             output_message=message.content,
+                            tool_calls=None,
+                            tool_results=None,
                             metadata={
                                 "no_tool_calls": True,
                                 "is_first_conversation": self.is_first_conversation,
@@ -452,7 +547,7 @@ class PlanningAgent(BaseAgent):
             
             # Get the conversation
             conversation = await self.conversation_storage.get_conversation(conversation_id)
-            logger.info(f"Loaded conversation {conversation_id} for first message check, data: {conversation}")
+            #logger.info(f"Loaded conversation {conversation_id} for first message check, data: {conversation}")
             if not conversation:
                 return True
             
@@ -673,11 +768,43 @@ This context was automatically retrieved from the user's history and is availabl
                         'conversation_id': conversation_id,
                         'message_id': self._current_message_id  # Pass message_id for tracking
                     }
-                    task_result = await self.task_manager_agent.process_message(
-                        user_message=request,
-                        user_context=user_context
-                    )
-                    logger.info(f"[PLANNER] Task manager completed delegation")
+                    # Delegate to task manager with a timeout to avoid hanging
+                    # Increased timeout for complex operations like closing duplicate tasks
+                    timeout_seconds = 300
+                    logger.info(f"[PLANNER] Starting task manager delegation (timeout: {timeout_seconds}s)...")
+                    start_time = datetime.now(timezone.utc)
+                    
+                    try:
+                        task_result = await asyncio.wait_for(
+                            self.task_manager_agent.process_message(
+                                user_message=request,
+                                user_context=user_context
+                            ),
+                            timeout=timeout_seconds
+                        )
+                        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+                        logger.info(f"[PLANNER] Task manager completed successfully in {elapsed:.2f}s")
+                        
+                    except asyncio.TimeoutError:
+                        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+                        # Record a timeout and return a helpful message
+                        self.metadata.setdefault('task_manager_timeouts', 0)
+                        self.metadata['task_manager_timeouts'] += 1
+                        logger.error(f"[PLANNER] Task manager timed out after {elapsed:.2f}s (limit: {timeout_seconds}s)")
+                        logger.error(f"[PLANNER] WARNING: Task manager agent may still be running. Check agent_call_log table for orphaned IN_PROGRESS records.")
+                        task_result = (
+                            f"TOOL TIMEOUT: The task management operation did not complete within {timeout_seconds} seconds ({elapsed:.0f}s elapsed). "
+                            f"The task manager may still be processing your request in the background. "
+                            f"\n\nSuggested actions:\n"
+                            f"- Wait a few minutes and check if tasks were updated\n"
+                            f"- Break your request into smaller, more specific operations\n"
+                            f"- For bulk operations, process tasks in batches of 5-10 at a time"
+                        )
+                    except Exception as e:
+                        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+                        logger.error(f"[PLANNER] Exception delegating to task manager after {elapsed:.2f}s: {e}", exc_info=True)
+                        task_result = f"TOOL ERROR: Failed to execute task management: {str(e)}"
+                    
                     results.append(task_result)
                 except Exception as e:
                     logger.error(f"Error executing manage_tasks tool: {e}")
@@ -694,6 +821,17 @@ This context was automatically retrieved from the user's history and is availabl
                 except Exception as e:
                     logger.error(f"Error executing manage_context tool: {e}")
                     results.append(f"Error managing context: {str(e)}")
+            elif tool_name == "redis_storage":
+                try:
+                    user_id = getattr(self, '_current_user_id', None)
+                    if not user_id:
+                        raise ValueError("No user_id available for Redis storage")
+                    
+                    redis_result = await self._execute_redis_storage(tool_input, user_id)
+                    results.append(redis_result)
+                except Exception as e:
+                    logger.error(f"Error executing redis_storage tool: {e}")
+                    results.append(f"Error with Redis storage: {str(e)}")
             else:
                 logger.warning(f"Unknown tool: {tool_name}")
                 results.append(f"Unknown tool: {tool_name}")
@@ -873,3 +1011,83 @@ This context was automatically retrieved from the user's history and is availabl
         except Exception as e:
             logger.error(f"Error in search_tasks tool: {e}")
             return f"Error searching tasks: {str(e)}"
+    
+    # ============================================================================
+    # PRIVATE METHODS - Redis Storage
+    # ============================================================================
+    
+    async def _execute_redis_storage(self, tool_input: Dict[str, Any], user_id: str) -> str:
+        """
+        Handler for redis_storage tool. Stores and retrieves data from Redis.
+        
+        Args:
+            tool_input: Dict with 'operation', 'key', optional 'value' and 'ttl'
+            user_id: User identifier for key namespacing
+            
+        Returns:
+            Result message or retrieved data
+        """
+        try:
+            if not self.redis_client:
+                return "Error: Redis client not available. Please configure Redis connection."
+            
+            operation = tool_input.get("operation")
+            key = tool_input.get("key", "").strip()
+            
+            if not key:
+                return "Error: 'key' parameter is required."
+            
+            # Namespace the key with user_id to prevent conflicts
+            namespaced_key = f"planner:{user_id}:{key}"
+            
+            if operation == "set":
+                value = tool_input.get("value")
+                if value is None:
+                    return "Error: 'value' parameter is required for 'set' operation."
+                
+                ttl = tool_input.get("ttl", 3600)  # Default 1 hour
+                
+                # Store the value
+                success = await self.redis_client.set(namespaced_key, value, ttl=ttl)
+                
+                if success:
+                    logger.info(f"Stored data in Redis: {namespaced_key} (TTL: {ttl}s)")
+                    return f"Successfully stored data with key '{key}' (expires in {ttl} seconds)."
+                else:
+                    return f"Failed to store data with key '{key}'."
+            
+            elif operation == "get":
+                # Retrieve the value
+                value = await self.redis_client.get(namespaced_key)
+                
+                if value is not None:
+                    logger.info(f"Retrieved data from Redis: {namespaced_key}")
+                    # Return the value as a string (will be JSON if object/array was stored)
+                    return f"Retrieved data for key '{key}': {json.dumps(value) if not isinstance(value, str) else value}"
+                else:
+                    return f"No data found for key '{key}'. It may have expired or never been set."
+            
+            elif operation == "delete":
+                # Delete the key
+                success = await self.redis_client.delete(namespaced_key)
+                
+                if success:
+                    logger.info(f"Deleted data from Redis: {namespaced_key}")
+                    return f"Successfully deleted data with key '{key}'."
+                else:
+                    return f"Failed to delete key '{key}' or key does not exist."
+            
+            elif operation == "exists":
+                # Check if key exists
+                exists = await self.redis_client.exists(namespaced_key)
+                
+                logger.info(f"Checked existence in Redis: {namespaced_key} = {exists}")
+                return f"Key '{key}' {'exists' if exists else 'does not exist'}."
+            
+            else:
+                return f"Error: Invalid operation '{operation}'. Use 'set', 'get', 'delete', or 'exists'."
+        
+        except Exception as e:
+            logger.error(f"Error in redis_storage tool: {e}")
+            logger.error(traceback.format_exc())
+            return f"Error with Redis storage: {str(e)}"
