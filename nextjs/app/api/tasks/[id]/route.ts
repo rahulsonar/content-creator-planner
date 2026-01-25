@@ -20,6 +20,11 @@ export async function GET(
             priority: true,
           },
         },
+        notes: {
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
       },
     });
 

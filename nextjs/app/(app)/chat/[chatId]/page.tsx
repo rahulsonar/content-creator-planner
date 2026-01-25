@@ -1,15 +1,17 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, Suspense, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useWebSocket } from '@/lib/hooks/useWebSocket';
 
 interface Message {
   id: number;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  model?: string;
 }
 
 const DEFAULT_MESSAGE: Message = {
@@ -23,13 +25,39 @@ function ChatContent() {
   const params = useParams();
   const router = useRouter();
   const chatId = params.chatId as string;
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(false);
+
+  console.log('ChatContent render - chatId:', chatId, 'mounted:', mounted);
   
   const [messages, setMessages] = useState<Message[]>([DEFAULT_MESSAGE]);
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [isLoadingConversation, setIsLoadingConversation] = useState(true);
-  const [mounted, setMounted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wsStatus, setWsStatus] = useState<'connected' | 'disconnected' | 'processing'>('disconnected');
+
+  // Only connect WebSocket after component is mounted and chatId is available
+  const shouldConnectWs = mounted && chatId;
+
+  // WebSocket hook for real-time updates
+  const { isConnected, isProcessing, sendMessage } = useWebSocket({
+    conversationId: shouldConnectWs ? chatId : null,
+    onMessage: (message) => {
+      console.log('[Chat Page] Received WebSocket message:', message.content.substring(0, 100));
+      setMessages((prev) => [...prev, message]);
+      // Scroll to bottom when new message arrives
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    },
+    onError: (errorMsg) => {
+      console.error('[Chat Page] WebSocket error:', errorMsg);
+      setError(errorMsg);
+    },
+    onStatusChange: (status) => {
+      setWsStatus(status);
+    },
+  });
 
   // Load conversation on mount
   useEffect(() => {
@@ -55,6 +83,7 @@ function ChatContent() {
           role: msg.role,
           content: msg.content,
           timestamp: new Date(msg.timestamp),
+          model: msg.model,
         }));
 
         // If no messages, show default greeting
@@ -76,8 +105,13 @@ function ChatContent() {
     loadConversation();
   }, [chatId]);
 
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isProcessing) return;
 
     const userMessage: Message = {
       id: messages.length + 1,
@@ -87,51 +121,11 @@ function ChatContent() {
     };
 
     setMessages([...messages, userMessage]);
+    const messageToSend = input;
     setInput('');
-    setIsLoading(true);
 
-    try {
-      // Call the chat API with existing conversationId
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: input,
-          conversationId: chatId, // Use the chatId from URL
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to get response');
-      }
-
-      const data = await response.json();
-
-      const aiMessage: Message = {
-        id: messages.length + 2,
-        role: 'assistant',
-        content: data.content,
-        timestamp: new Date(),
-      };
-
-      setMessages(prev => [...prev, aiMessage]);
-    } catch (error: any) {
-      console.error('Chat error:', error);
-      
-      const errorMessage: Message = {
-        id: messages.length + 2,
-        role: 'assistant',
-        content: `Sorry, I encountered an error: ${error.message}. Please make sure the OpenAI API key is configured.`,
-        timestamp: new Date(),
-      };
-      
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
+    // Send via WebSocket for real-time response
+    sendMessage(messageToSend);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -148,9 +142,25 @@ function ChatContent() {
         <div className="flex items-center justify-between">
           <div className="flex-1">
             <h1 className="text-2xl font-bold text-gray-900">AI Content Strategy Assistant</h1>
-            <p className="text-sm text-gray-600 mt-1">
-              Conversation ID: {chatId}
-            </p>
+            <div className="flex items-center gap-3 mt-1">
+              <p className="text-sm text-gray-600">
+                Conversation ID: {chatId}
+              </p>
+              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${
+                wsStatus === 'connected' ? 'bg-green-100 text-green-700' :
+                wsStatus === 'processing' ? 'bg-yellow-100 text-yellow-700' :
+                'bg-red-100 text-red-700'
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  wsStatus === 'connected' ? 'bg-green-500' :
+                  wsStatus === 'processing' ? 'bg-yellow-500' :
+                  'bg-red-500'
+                }`}></span>
+                {wsStatus === 'connected' ? 'Live' : 
+                 wsStatus === 'processing' ? 'Processing' : 
+                 'Reconnecting...'}
+              </span>
+            </div>
           </div>
           <button
             onClick={() => router.push('/chat')}
@@ -212,13 +222,16 @@ function ChatContent() {
                     )}
                     <p className={`text-xs mt-2 ${message.role === 'user' ? 'text-blue-100' : 'text-gray-500'}`}>
                       {mounted ? message.timestamp.toLocaleTimeString() : ''}
+                      {message.model && message.role === 'assistant' && (
+                        <span className="ml-2 opacity-60">• {message.model}</span>
+                      )}
                     </p>
                   </div>
                 </div>
               </div>
             </div>
           ))}
-          {isLoading && (
+          {isProcessing && (
             <div className="flex justify-start">
               <div className="max-w-3xl rounded-lg px-4 py-3 bg-white border border-gray-200">
                 <div className="flex items-start gap-3">
@@ -231,12 +244,13 @@ function ChatContent() {
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
                     </div>
-                    <span className="text-sm text-gray-500">Thinking...</span>
+                    <span className="text-sm text-gray-500">Processing your request...</span>
                   </div>
                 </div>
               </div>
             </div>
           )}
+          <div ref={messagesEndRef} />
         </div>
       )}
 
@@ -250,22 +264,29 @@ function ChatContent() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Ask about content strategy, video ideas, scheduling..."
-              disabled={isLoading}
+              disabled={isProcessing || !isConnected}
               className="flex-1 resize-none rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 placeholder:text-gray-500 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
               rows={3}
             />
             <button
               onClick={handleSend}
-              disabled={!input.trim() || isLoading}
+              disabled={!input.trim() || isProcessing || !isConnected}
               className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-2"
             >
-              {isLoading ? (
+              {isProcessing ? (
                 <>
                   <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  <span>Sending...</span>
+                  <span>Processing...</span>
+                </>
+              ) : !isConnected ? (
+                <>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3m8.293 8.293l1.414 1.414" />
+                  </svg>
+                  <span>Connecting...</span>
                 </>
               ) : (
                 'Send'

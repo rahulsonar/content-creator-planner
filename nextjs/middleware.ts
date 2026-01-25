@@ -12,6 +12,11 @@ export function middleware(request: NextRequest) {
   // Public routes that don't require authentication
   const publicRoutes = ['/login', '/api/auth/login', '/api/auth/signup', '/api/auth/logout'];
   
+  // Internal webhook route - uses X-Internal-Secret header instead of JWT
+  if (pathname === '/api/chat/webhook') {
+    return NextResponse.next();
+  }
+  
   if (publicRoutes.includes(pathname)) {
     return NextResponse.next();
   }

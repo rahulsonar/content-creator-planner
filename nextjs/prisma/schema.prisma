@@ -43,6 +43,9 @@ model Task {
   dependsOn   TaskDependency[] @relation("DependentTask")
   blockedBy   TaskDependency[] @relation("BlockingTask")
   
+  // Task notes
+  notes       TaskNote[]
+  
   // AI-related fields
   aiGenerated Boolean  @default(false)
   aiSuggestions String? @db.Text
@@ -60,6 +63,21 @@ model Task {
   @@index([parentId])
   @@index([status])
   @@index([dueDate])
+}
+
+model TaskNote {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  content   String   @db.Text
+  createdBy String?  // User ID who created the note
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([taskId])
+  @@index([createdAt])
 }
 
 model TaskDependency {

@@ -19,6 +19,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: content-planner-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   app:
     build:
       context: ./nextjs
@@ -53,19 +68,27 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_planner
+      - REDIS_URL=redis://redis:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-default-internal-secret-change-me}
       - ENABLE_OPENAI_TOOLS=${ENABLE_OPENAI_TOOLS:-true}
       - USE_DUMMY_AI=${USE_DUMMY_AI:-false}
+      - PLANNER_MODEL=${PLANNER_MODEL:-gpt-4}
+      - TASK_MANAGER_MODEL=${TASK_MANAGER_MODEL:-gpt-4}
+      - CONTEXT_MANAGER_MODEL=${CONTEXT_MANAGER_MODEL:-gpt-4}
 
     volumes:
       - ./python-agents:/app
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  redis_data:
   node_modules:
   next_cache:

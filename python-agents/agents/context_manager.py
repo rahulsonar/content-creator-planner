@@ -33,6 +33,8 @@ class ContextManagerAgent(BaseAgent):
         self.current_user_id = None  # Will be set during process_message
         self.db_session = db_session
         self._current_agent_call_log_id = None  # Track current agent call log
+        self._tool_calls_log = []  # Track tool calls for logging
+        self._tool_results_log = []  # Track tool results for logging
 
         # Initialize metadata
         self.metadata = {
@@ -162,6 +164,10 @@ class ContextManagerAgent(BaseAgent):
         # Increment message counters
         self.metadata["total_messages"] += 1
         self.metadata["total_user_messages"] += 1
+        
+        # Reset tool tracking for this message
+        self._tool_calls_log = []
+        self._tool_results_log = []
 
         logger.info(f"Processing message: {self.get_metadata_summary()}")
 
@@ -212,11 +218,14 @@ class ContextManagerAgent(BaseAgent):
                 await agent_call_logger.complete_agent_call(
                     log_id=self._current_agent_call_log_id,
                     output_message=response,
+                    tool_calls=self._tool_calls_log if self._tool_calls_log else None,
+                    tool_results=self._tool_results_log if self._tool_results_log else None,
                     metadata={
                         "final_history_length": len(self.conversation_history),
                         "files_created": self.metadata.get("files_created", 0),
                         "files_updated": self.metadata.get("files_updated", 0),
-                        "files_read": self.metadata.get("files_read", 0)
+                        "files_read": self.metadata.get("files_read", 0),
+                        "tool_calls_count": len(self._tool_calls_log)
                     }
                 )
                 logger.info(f"Completed agent call log: {self._current_agent_call_log_id}")
@@ -274,28 +283,23 @@ class ContextManagerAgent(BaseAgent):
                 tool_calls_log = []
                 tool_results_log = []
                 
-                # Log tool calls for legacy logging
+                # Track tool calls for final logging
                 for tc in message.tool_calls:
+                    tool_call_data = {
+                        'id': tc.id,
+                        'type': tc.type,
+                        'function': {
+                            'name': tc.function.name,
+                            'arguments': tc.function.arguments
+                        }
+                    }
+                    self._tool_calls_log.append(tool_call_data)
                     tool_calls_log.append({
                         'id': tc.id,
                         'name': tc.function.name,
                         'arguments': json.loads(tc.function.arguments),
                         'timestamp': datetime.utcnow().isoformat()
                     })
-                
-                # Log tool calls to agent_call_logger
-                tool_calls_data = [{
-                    "call_id": tc.id,
-                    "name": tc.function.name,
-                    "arguments": json.loads(tc.function.arguments),
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                } for tc in message.tool_calls]
-                
-                try:
-                    await agent_call_logger.update_tool_calls(self._current_agent_call_log_id, tool_calls_data)
-                    logger.info(f"Logged {len(tool_calls_data)} tool calls to agent_call_logger")
-                except Exception as e:
-                    logger.error(f"Failed to log tool calls to agent_call_logger: {e}")
                 
                 # Add assistant message with tool calls to history
                 self.add_to_history("assistant", {
@@ -317,31 +321,28 @@ class ContextManagerAgent(BaseAgent):
                     
                     try:
                         result = await self._execute_tool({"name": tool_name, "arguments": tool_args})
-                        tool_results_log.append({
+                        tool_result_data = {
                             'tool_call_id': tool_call.id,
                             'result': result,
                             'success': True,
                             'timestamp': datetime.utcnow().isoformat()
-                        })
+                        }
+                        tool_results_log.append(tool_result_data)
+                        self._tool_results_log.append(tool_result_data)
                     except Exception as tool_error:
                         error_msg = f"Error executing {tool_name}: {str(tool_error)}"
-                        tool_results_log.append({
+                        tool_result_data = {
                             'tool_call_id': tool_call.id,
                             'result': error_msg,
                             'success': False,
                             'timestamp': datetime.utcnow().isoformat()
-                        })
+                        }
+                        tool_results_log.append(tool_result_data)
+                        self._tool_results_log.append(tool_result_data)
                         logger.error(error_msg)
                     
                     # Add tool result to history
                     self.add_to_history("tool", result, tool_call.id)
-                
-                # Log tool results to agent_call_logger
-                try:
-                    await agent_call_logger.update_tool_results(self._current_agent_call_log_id, tool_results_log)
-                    logger.info(f"Logged {len(tool_results_log)} tool results to agent_call_logger")
-                except Exception as e:
-                    logger.error(f"Failed to log tool results to agent_call_logger: {e}")
                 
                 # Get follow-up response after tool execution
                 follow_up = await self.model_client.generate_completion(

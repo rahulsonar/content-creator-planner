@@ -50,17 +50,18 @@ async def test_task_manager(prompt: str, user_id: str = "test-user-123", convers
         print("🔌 Database connection ready...")
         print("✅ Database connected\n")
         
-        # Initialize OpenAI client
-        print("🤖 Initializing OpenAI client...")
-        model_client = OpenAIClient(
-            model="gpt-4o-mini",  # Using gpt-4o-mini for faster/cheaper testing
+        # Initialize Claude client
+        print("🤖 Initializing Claude client...")
+        from models import create_model_client
+        model_client = create_model_client(
+            "claude-sonnet-4-5-20250929",
             metadata={
                 "conversation_id": conversation_id,
                 "user_id": user_id,
                 "test_script": "true"
             }
         )
-        print("✅ OpenAI client initialized\n")
+        print("✅ Claude client initialized\n")
         
         # Initialize TaskManager agent
         print("🎯 Initializing TaskManager agent...")
