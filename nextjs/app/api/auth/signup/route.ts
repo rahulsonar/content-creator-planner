@@ -40,12 +40,20 @@ export async function POST(request: NextRequest) {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create new user
+    // Create new user with default project
     const user = await prisma.user.create({
       data: {
         email: email.toLowerCase(),
         password: hashedPassword,
         name: name || null,
+        projects: {
+          create: {
+            name: 'Default',
+            description: 'Your default project for organizing tasks',
+            status: 'ACTIVE',
+            isDefault: true,
+          },
+        },
       },
     });
 

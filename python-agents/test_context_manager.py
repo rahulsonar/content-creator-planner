@@ -53,7 +53,7 @@ async def test_context_manager(prompt: str, user_id: str = "test-user-123", conv
         # Initialize OpenAI client
         print("🤖 Initializing OpenAI client...")
         model_client = OpenAIClient(
-            model="gpt-4o-mini",  # Using gpt-4o-mini for faster/cheaper testing
+            model="gpt-5",  # Using gpt-4o-mini for faster/cheaper testing
             metadata={
                 "conversation_id": conversation_id,
                 "user_id": user_id,
@@ -73,6 +73,8 @@ async def test_context_manager(prompt: str, user_id: str = "test-user-123", conv
             "conversation_id": conversation_id,
             "session_id": "test-session-123"
         }
+
+        logger.info(f"Starting test with prompt: '{prompt}' for user_id: {user_id}, conversation_id: {conversation_id}")
         
         # Process the message
         print(f"💬 Processing prompt: '{prompt}'\n")
@@ -182,6 +184,10 @@ def main():
     # Get arguments
     prompt = sys.argv[1]
     user_id = sys.argv[2] if len(sys.argv) > 2 else "test-user-123"
+
+    logger.info(f"Test script started with prompt: {prompt}, user_id: {user_id}")
+    
+
     conversation_id = sys.argv[3] if len(sys.argv) > 3 else "test-conv-123"
     
     # Check environment variables

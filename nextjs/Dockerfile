@@ -1,6 +1,13 @@
 # Development stage
 FROM node:20-alpine AS development
 
+# Set timezone to IST
+RUN apk add --no-cache tzdata && \
+    cp /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
+    echo "Asia/Kolkata" > /etc/timezone
+
+ENV TZ=Asia/Kolkata
+
 WORKDIR /app
 
 # Install dependencies will happen at runtime
@@ -27,6 +34,13 @@ CMD ["/start.sh"]
 # Production build stage
 FROM node:20-alpine AS builder
 
+# Set timezone to IST
+RUN apk add --no-cache tzdata && \
+    cp /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
+    echo "Asia/Kolkata" > /etc/timezone
+
+ENV TZ=Asia/Kolkata
+
 WORKDIR /app
 
 # Copy package files
@@ -43,6 +57,13 @@ RUN npm run build
 
 # Production runtime stage
 FROM node:20-alpine AS production
+
+# Set timezone to IST
+RUN apk add --no-cache tzdata && \
+    cp /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
+    echo "Asia/Kolkata" > /etc/timezone
+
+ENV TZ=Asia/Kolkata
 
 WORKDIR /app
 

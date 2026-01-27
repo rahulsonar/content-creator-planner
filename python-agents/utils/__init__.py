@@ -7,8 +7,6 @@ from .user_context_manager import (
     update_user_context,
     delete_user_context,
     list_user_context_files,
-    read_json_user_context,
-    write_json_user_context,
     ensure_user_context_dir,
     get_user_context_path
 )
@@ -24,8 +22,6 @@ __all__ = [
     "update_user_context",
     "delete_user_context",
     "list_user_context_files",
-    "read_json_user_context",
-    "write_json_user_context",
     "ensure_user_context_dir",
     "get_user_context_path",
 ]

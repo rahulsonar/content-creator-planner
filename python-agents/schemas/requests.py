@@ -45,6 +45,7 @@ class TaskUpdateRequest(BaseModel):
     aiContext: Optional[str] = None
     aiSuggestions: Optional[str] = None
     tags: Optional[List[str]] = None
+    labels: Optional[List[str]] = None
 
 
 class TaskBatchUpdateRequest(BaseModel):

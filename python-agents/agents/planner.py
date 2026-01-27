@@ -39,6 +39,7 @@ class PlanningAgent(BaseAgent):
         self.is_first_conversation = False
         self._context_cached = False  # Track if context already cached in this session
         self._current_user_id = None
+        self._current_user_name = None
         self._current_conversation_id = None
         self._current_message_id = None
         self._current_log_id = None  # Track current agent call log
@@ -71,8 +72,8 @@ class PlanningAgent(BaseAgent):
             {
                 "type": "function",
                 "function": {
-                    "name": "manage_tasks",
-                    "description": "Delegate task management operations to the UserTaskManager agent. Supports: creating tasks (with initial notes), searching tasks, updating task fields, adding notes to existing tasks, and retrieving task details. Use 'add notes' for appending notes to tasks.",
+                    "name": "manage_user_tasks",
+                    "description": "Delegate task management operations to the UserTaskManager agent. Supports: creating tasks (with initial notes), searching tasks, updating task fields, adding notes to existing tasks, retrieving task details and managing projects. Use 'add notes' for appending notes to tasks. Cannot handle large number of tasks at once; for bulk operations, break into smaller batches or use subtasks. you can use redis_storage to store intermediate task lists or data if needed.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -88,7 +89,7 @@ class PlanningAgent(BaseAgent):
             {
                 "type": "function",
                 "function": {
-                    "name": "manage_context",
+                    "name": "manage_user_context",
                     "description": "Manage user context: save new information about user goals/preferences, request additional context, retrieve existing context, or list context files.",
                     "parameters": {
                         "type": "object",
@@ -148,10 +149,58 @@ class PlanningAgent(BaseAgent):
                         "required": ["operation", "key"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "break_into_subtasks",
+                    "description": "Break a complex task into smaller independent subtasks and delegate to child executor agents for parallel processing. Each subtask will be executed by an independent executor agent instance. Use this for complex tasks that can be parallelized.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "parent_task_description": {
+                                "type": "string",
+                                "description": "Description of the main/parent task to be broken down"
+                            },
+                            "subtasks": {
+                                "type": "array",
+                                "description": "List of subtasks to execute in parallel",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "string",
+                                            "description": "Unique identifier for this subtask (e.g., 'subtask_1', 'research_competitors')"
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "Clear description of what this subtask should accomplish"
+                                        },
+                                        "goal": {
+                                            "type": "string",
+                                            "description": "Specific goal or expected output for this subtask"
+                                        },
+                                        "context": {
+                                            "type": "object",
+                                            "description": "Additional context or data needed for this subtask",
+                                            "additionalProperties": True
+                                        }
+                                    },
+                                    "required": ["id", "description", "goal"]
+                                }
+                            },
+                            "wait_for_completion": {
+                                "type": "boolean",
+                                "description": "Whether to wait for all subtasks to complete before responding (default: true)"
+                            }
+                        },
+                        "required": ["parent_task_description", "subtasks"]
+                    }
+                }
             }
         ]
         
-        # Initialize with comprehensive system prompt
+        # Initialize with comprehensive system prompt (no user name available yet)
         self._initialize_system_prompt()
 
     def update_metadata(self, **kwargs):
@@ -185,10 +234,14 @@ class PlanningAgent(BaseAgent):
             f"tools={m['tool_calls_count']}, tasks={m['tasks_created']}"
         )
     
-    def _initialize_system_prompt(self):
+    def _initialize_system_prompt(self, user_name: str | None = None):
         """Initialize the agent with system prompts and instructions"""
+        # Add personalized greeting if user name is available
+        if user_name:
+            greeting = f"You are talking to {user_name}."
+            self.add_to_history("system", greeting)
+        
         self.add_to_history("system", PLANNING_SYSTEM_PROMPT)
-        self.add_to_history("system", "Markdown formatting is supported in your responses.")
        
         
     
@@ -225,9 +278,12 @@ class PlanningAgent(BaseAgent):
 
         logger.info(f"Processing message: {self.get_metadata_summary()}")
 
-        # Store user_id and conversation_id for tool execution
+        # Store user_id, user_name, and conversation_id for tool execution
+        user_name = None
         if user_context and 'user_id' in user_context:
             self._current_user_id = user_context['user_id']
+            user_name = user_context.get('user_name')
+            self._current_user_name = user_name  # Store as instance variable for tool access
             self._current_conversation_id = user_context.get('conversation_id')
             self._current_message_id = user_context.get('message_id')
         
@@ -270,6 +326,18 @@ class PlanningAgent(BaseAgent):
             self.update_metadata(is_first_conversation=self.is_first_conversation)
 
             logger.info(f"is_first_conversation={self.is_first_conversation} for user {user_context.get('user_id')}")
+
+            # Add user name greeting at the start if conversation history exists and no greeting yet
+            if user_name and self.conversation_history:
+                # Check if first message is already a user greeting
+                first_msg = self.conversation_history[0] if len(self.conversation_history) > 0 else None
+                has_greeting = first_msg and first_msg.get("role") == "system" and "talking to" in first_msg.get("content", "").lower()
+                
+                if not has_greeting:
+                    # Insert greeting at the beginning
+                    greeting = f"You are talking to {user_name}."
+                    self.conversation_history.insert(0, {"role": "system", "content": greeting})
+                    logger.info(f"Added user greeting to conversation history for {user_name}")
 
             if self.is_first_conversation:
                 logger.info(f"First conversation detected for user {user_context.get('user_id')}")
@@ -585,7 +653,7 @@ class PlanningAgent(BaseAgent):
             logger.info(f"Loading basic profile and goals for user: {user_id}")
             
             # Request basic profile and goals from context manager
-            basic_query = "Please provide the user's basic profile (name, role, preferences) and their main goals or content plans."
+            basic_query = "Please provide the user's basic profile (name, role, preferences) and their main goals or content plans. If not found, describe this user in 2-3 sentences based on available information."
             context_info = await self._request_context_from_manager(
                 query=basic_query,
                 reasoning="Loading basic user context for returning user at conversation start",
@@ -599,7 +667,7 @@ class PlanningAgent(BaseAgent):
 
 === End of User Context ===
 
-This basic context was automatically retrieved for this returning user. You can request additional specific details if needed using the manage_context tool."""
+This basic context was automatically retrieved for this returning user. You can request additional specific details if needed using the manage_user_context tool."""
             
             self.add_to_history("system", cached_context)
             logger.info("Basic user context successfully loaded")
@@ -746,7 +814,7 @@ This context was automatically retrieved from the user's history and is availabl
 
             logger.info(f"Executing tool: {tool_name} (total: {tools_by_type[tool_name]})")
             
-            if tool_name == "manage_tasks":
+            if tool_name == "manage_user_tasks":
                 try:
                     user_id = getattr(self, '_current_user_id', None)
                     conversation_id = getattr(self, '_current_conversation_id', None)
@@ -785,6 +853,31 @@ This context was automatically retrieved from the user's history and is availabl
                         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
                         logger.info(f"[PLANNER] Task manager completed successfully in {elapsed:.2f}s")
                         
+                        # Parse JSON response from task manager
+                        try:
+                            task_response = json.loads(task_result) if isinstance(task_result, str) else task_result
+                            # Extract message and status for LLM context
+                            message = task_response.get('message', str(task_result))
+                            status = task_response.get('status', 'unknown')
+                            # Build human-readable summary for LLM
+                            task_result_str = f"[Task Manager - {status.upper()}] {message}"
+                            if task_response.get('error'):
+                                task_result_str += f"\nError: {task_response['error']}"
+                            if task_response.get('data'):
+                                # Include relevant data counts for LLM context
+                                data = task_response['data']
+                                if 'created_count' in data:
+                                    task_result_str += f"\nCreated {data['created_count']} items"
+                                if 'updated_count' in data:
+                                    task_result_str += f"\nUpdated {data['updated_count']} items"
+                                if 'total_count' in data:
+                                    task_result_str += f"\nFound {data['total_count']} items"
+                            logger.info(f"[PLANNER] Task manager response parsed: {task_result_str}")
+                            results.append(task_result_str)
+                        except (json.JSONDecodeError, TypeError) as parse_error:
+                            logger.warning(f"[PLANNER] Failed to parse task manager JSON response: {parse_error}, using raw response")
+                            results.append(str(task_result))
+                        
                     except asyncio.TimeoutError:
                         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
                         # Record a timeout and return a helpful message
@@ -800,16 +893,16 @@ This context was automatically retrieved from the user's history and is availabl
                             f"- Break your request into smaller, more specific operations\n"
                             f"- For bulk operations, process tasks in batches of 5-10 at a time"
                         )
+                        results.append(task_result)
                     except Exception as e:
                         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
                         logger.error(f"[PLANNER] Exception delegating to task manager after {elapsed:.2f}s: {e}", exc_info=True)
                         task_result = f"TOOL ERROR: Failed to execute task management: {str(e)}"
-                    
-                    results.append(task_result)
+                        results.append(task_result)
                 except Exception as e:
-                    logger.error(f"Error executing manage_tasks tool: {e}")
+                    logger.error(f"Error executing manage_user_tasks tool: {e}")
                     results.append(f"Error managing tasks: {str(e)}")
-            elif tool_name == "manage_context":
+            elif tool_name == "manage_user_context":
                 try:
                     user_id = getattr(self, '_current_user_id', None)
                     if not user_id:
@@ -819,7 +912,7 @@ This context was automatically retrieved from the user's history and is availabl
                     context_result = await self._manage_context_tool(action, tool_input, user_id)
                     results.append(context_result)
                 except Exception as e:
-                    logger.error(f"Error executing manage_context tool: {e}")
+                    logger.error(f"Error executing manage_user_context tool: {e}")
                     results.append(f"Error managing context: {str(e)}")
             elif tool_name == "redis_storage":
                 try:
@@ -832,6 +925,19 @@ This context was automatically retrieved from the user's history and is availabl
                 except Exception as e:
                     logger.error(f"Error executing redis_storage tool: {e}")
                     results.append(f"Error with Redis storage: {str(e)}")
+            elif tool_name == "break_into_subtasks":
+                try:
+                    user_id = getattr(self, '_current_user_id', None)
+                    conversation_id = getattr(self, '_current_conversation_id', None)
+                    if not user_id:
+                        raise ValueError("No user_id available for subtask execution")
+                    
+                    subtask_result = await self._execute_break_into_subtasks(tool_input, user_id, conversation_id)
+                    results.append(subtask_result)
+                except Exception as e:
+                    logger.error(f"Error executing break_into_subtasks tool: {e}")
+                    logger.error(traceback.format_exc())
+                    results.append(f"Error breaking into subtasks: {str(e)}")
             else:
                 logger.warning(f"Unknown tool: {tool_name}")
                 results.append(f"Unknown tool: {tool_name}")
@@ -854,7 +960,7 @@ This context was automatically retrieved from the user's history and is availabl
 
     async def _manage_context_tool(self, action: str, tool_input: Dict[str, Any], user_id: str) -> str:
         """
-        Handler for manage_context tool. Routes to ContextManagerAgent for execution.
+        Handler for manage_user_context tool. Routes to ContextManagerAgent for execution.
         """
         try:
             if action == "save":
@@ -884,6 +990,7 @@ This context was automatically retrieved from the user's history and is availabl
             # Delegate to context manager agent with full user context
             user_context = {
                 'user_id': user_id,
+                'user_name': self._current_user_name,  # Include user name for context
                 'conversation_id': self._current_conversation_id,
                 'message_id': self._current_message_id,
                 'session_id': self.metadata.get('session_id')
@@ -902,115 +1009,7 @@ This context was automatically retrieved from the user's history and is availabl
     # PRIVATE METHODS - Task Search
     # ============================================================================
     
-    async def _search_tasks_tool(self, tool_input: Dict[str, Any]) -> str:
-        """
-        Handler for search_tasks tool. Searches and retrieves tasks from the database.
-        
-        Args:
-            tool_input: Dict with optional 'keywords', 'status_filter', 'priority_filter'
-            
-        Returns:
-            Formatted string with search results
-        """
-        import asyncpg
-        from config.settings import Settings
-        
-        try:
-            action = tool_input.get("action", "").lower()
-            keywords = tool_input.get("keywords", "").strip()
-            status_filter = tool_input.get("status_filter", "").strip()
-            priority_filter = tool_input.get("priority_filter", "").strip()
-            
-            settings = Settings()
-            db_url = settings.DATABASE_URL
-            conn = await asyncpg.connect(db_url)
-            
-            try:
-                if action == "get_all":
-                    # Get all tasks
-                    query = """
-                        SELECT id, title, description, status, priority, 
-                               "estimatedHours", "aiGenerated", "createdAt", "updatedAt"
-                        FROM "Task"
-                        ORDER BY "createdAt" DESC
-                        LIMIT 100
-                    """
-                    params = []
-                    
-                elif action == "search":
-                    if not keywords:
-                        return "Error: 'keywords' parameter is required for 'search' action."
-                    
-                    # Build dynamic query with filters
-                    where_clauses = [
-                        "(LOWER(title) LIKE LOWER($1) OR LOWER(description) LIKE LOWER($1))"
-                    ]
-                    params = [f"%{keywords}%"]
-                    param_count = 2
-                    
-                    if status_filter:
-                        where_clauses.append(f"status = ${param_count}")
-                        params.append(status_filter)
-                        param_count += 1
-                    
-                    if priority_filter:
-                        where_clauses.append(f'priority = ${param_count}::"Priority"')
-                        params.append(priority_filter)
-                        param_count += 1
-                    
-                    where_clause = " AND ".join(where_clauses)
-                    
-                    query = f"""
-                        SELECT id, title, description, status, priority, 
-                               "estimatedHours", "aiGenerated", "createdAt", "updatedAt"
-                        FROM "Task"
-                        WHERE {where_clause}
-                        ORDER BY "createdAt" DESC
-                        LIMIT 50
-                    """
-                else:
-                    return f"Error: Invalid action '{action}'. Use 'search' or 'get_all'."
-                
-                # Execute query
-                tasks = await conn.fetch(query, *params)
-                
-                # If search returned no results and action was search, fallback to get_all
-                if not tasks and action == "search":
-                    logger.info(f"No tasks found for keywords '{keywords}'. Falling back to get_all.")
-                    query = """
-                        SELECT id, title, description, status, priority, 
-                               "estimatedHours", "aiGenerated", "createdAt", "updatedAt"
-                        FROM "Task"
-                        ORDER BY "createdAt" DESC
-                        LIMIT 100
-                    """
-                    tasks = await conn.fetch(query)
-                    result_text = f"No tasks found matching '{keywords}'. Returning all available tasks ({len(tasks)} total):\n\n"
-                else:
-                    if not tasks:
-                        return "No tasks found matching your criteria."
-                    result_text = f"Found {len(tasks)} task(s):\n\n"
-                
-                # Format results
-                for task in tasks:
-                    result_text += f"**[{task['status']}] {task['title']}** (Priority: {task['priority']})\n"
-                    result_text += f"  ID: {task['id']}\n"
-                    if task['description']:
-                        desc = task['description'][:200] + "..." if len(task['description']) > 200 else task['description']
-                        result_text += f"  Description: {desc}\n"
-                    if task['estimatedHours']:
-                        result_text += f"  Estimated: {task['estimatedHours']} hours\n"
-                    result_text += f"  Created: {task['createdAt'].strftime('%Y-%m-%d')}\n\n"
-                
-                logger.info(f"Task search completed: found {len(tasks)} tasks")
-                return result_text
-                
-            finally:
-                await conn.close()
-                
-        except Exception as e:
-            logger.error(f"Error in search_tasks tool: {e}")
-            return f"Error searching tasks: {str(e)}"
+    
     
     # ============================================================================
     # PRIVATE METHODS - Redis Storage
@@ -1091,3 +1090,179 @@ This context was automatically retrieved from the user's history and is availabl
             logger.error(f"Error in redis_storage tool: {e}")
             logger.error(traceback.format_exc())
             return f"Error with Redis storage: {str(e)}"
+
+    async def _execute_break_into_subtasks(
+        self, 
+        tool_input: Dict[str, Any], 
+        user_id: str,
+        conversation_id: Optional[str] = None
+    ) -> str:
+        """
+        Break a task into subtasks and delegate to executor agents.
+        
+        Args:
+            tool_input: Dict with 'parent_task_description', 'subtasks', and optional 'wait_for_completion'
+            user_id: User identifier
+            conversation_id: Optional conversation identifier
+            
+        Returns:
+            Result summary of subtask execution
+        """
+        try:
+            from agents.executor import ExecutorAgent
+            from models.factory import create_model_client
+            
+            parent_description = tool_input.get("parent_task_description", "")
+            subtasks = tool_input.get("subtasks", [])
+            wait_for_completion = tool_input.get("wait_for_completion", True)
+            
+            if not subtasks:
+                return "Error: No subtasks provided. Please specify at least one subtask."
+            
+            # Generate a unique parent task ID for this batch
+            parent_task_id = f"parent_{datetime.now(timezone.utc).timestamp()}"
+            
+            logger.info(f"[PLANNER] Breaking into {len(subtasks)} subtasks for parent: {parent_task_id}")
+            
+            # Store subtask contexts in Redis
+            for subtask in subtasks:
+                subtask_id = subtask.get("id")
+                if not subtask_id:
+                    continue
+                
+                subtask_context = {
+                    "id": subtask_id,
+                    "description": subtask.get("description", ""),
+                    "goal": subtask.get("goal", ""),
+                    "context": subtask.get("context", {}),
+                    "task_type": subtask.get("context", {}).get("task_type", "general"),
+                    "parent_task_id": parent_task_id,
+                    "parent_description": parent_description,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                }
+                
+                # Store in Redis
+                key = f"subtask:{parent_task_id}:{subtask_id}:{user_id}"
+                await self.redis_client.set(
+                    key, 
+                    json.dumps(subtask_context),
+                    ex=3600  # Expire after 1 hour
+                )
+                logger.info(f"[PLANNER] Stored context for subtask: {subtask_id}")
+            
+            # Create executor agents and launch subtask executions
+            executor_tasks = []
+            executor_agents = []
+            
+            for subtask in subtasks:
+                subtask_id = subtask.get("id")
+                if not subtask_id:
+                    continue
+                
+                # Create a new executor agent for each subtask
+                executor_model = create_model_client(
+                    model=getattr(self.model_client, 'model', 'gpt-4o-mini')
+                )
+                
+                executor = ExecutorAgent(
+                    model_client=executor_model,
+                    redis_client=self.redis_client,
+                    task_manager_agent=self.task_manager_agent,
+                    executor_id=f"executor_{subtask_id}_{datetime.now(timezone.utc).timestamp()}"
+                )
+                
+                executor_agents.append(executor)
+                
+                # Launch subtask execution
+                task = executor.execute_subtask(
+                    subtask_id=subtask_id,
+                    parent_task_id=parent_task_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id
+                )
+                executor_tasks.append(task)
+                
+                logger.info(f"[PLANNER] Launched executor for subtask: {subtask_id}")
+            
+            if not executor_tasks:
+                return "Error: No valid subtasks to execute."
+            
+            # Wait for completion if requested
+            if wait_for_completion:
+                logger.info(f"[PLANNER] Waiting for {len(executor_tasks)} subtasks to complete...")
+                
+                try:
+                    results = await asyncio.gather(*executor_tasks, return_exceptions=True)
+                    
+                    # Process results
+                    completed = 0
+                    failed = 0
+                    outputs = []
+                    
+                    for i, result in enumerate(results):
+                        if isinstance(result, Exception):
+                            failed += 1
+                            logger.error(f"[PLANNER] Subtask {i} failed with exception: {result}")
+                        elif isinstance(result, dict):
+                            if result.get("success"):
+                                completed += 1
+                                outputs.append({
+                                    "subtask_id": result.get("subtask_id"),
+                                    "executor_id": result.get("executor_id"),
+                                    "output": result.get("output", "")[:500]  # Truncate for summary
+                                })
+                            else:
+                                failed += 1
+                        else:
+                            failed += 1
+                    
+                    # Build summary response
+                    summary = f"""Subtask Execution Complete:
+- Parent Task: {parent_description}
+- Total Subtasks: {len(subtasks)}
+- Completed: {completed}
+- Failed: {failed}
+
+Results:
+"""
+                    for output in outputs:
+                        summary += f"\n**{output['subtask_id']}** (by {output['executor_id']}):\n{output['output']}\n"
+                    
+                    # Store aggregated results in Redis for later retrieval
+                    results_key = f"subtask_results:{parent_task_id}:{user_id}"
+                    await self.redis_client.set(
+                        results_key,
+                        json.dumps({
+                            "parent_task_id": parent_task_id,
+                            "parent_description": parent_description,
+                            "total_subtasks": len(subtasks),
+                            "completed": completed,
+                            "failed": failed,
+                            "results": outputs,
+                            "completed_at": datetime.now(timezone.utc).isoformat()
+                        }),
+                        ex=7200  # Keep results for 2 hours
+                    )
+                    
+                    logger.info(f"[PLANNER] All subtasks completed. Completed: {completed}, Failed: {failed}")
+                    return summary
+                    
+                except Exception as e:
+                    logger.error(f"[PLANNER] Error waiting for subtasks: {e}")
+                    logger.error(traceback.format_exc())
+                    return f"Error executing subtasks: {str(e)}"
+            else:
+                # Don't wait - return immediately
+                response = f"""Launched {len(executor_tasks)} subtasks for execution:
+- Parent Task: {parent_description}
+- Subtasks: {', '.join([s.get('id', 'unknown') for s in subtasks])}
+
+Subtasks are executing in the background. You can check their status in Redis using the parent task ID: {parent_task_id}
+"""
+                logger.info(f"[PLANNER] Launched {len(executor_tasks)} subtasks without waiting")
+                return response
+                
+        except Exception as e:
+            logger.error(f"[PLANNER] Error in break_into_subtasks: {e}")
+            logger.error(traceback.format_exc())
+            return f"Error breaking into subtasks: {str(e)}"

@@ -9,17 +9,19 @@ from utils.logger import logger
 
 async def verify_internal_request(
     x_internal_secret: str = Header(None),
-    x_user_id: str = Header(None)
-) -> str:
+    x_user_id: str = Header(None),
+    x_user_name: str = Header(None)
+) -> tuple[str, str | None]:
     """
     Verify internal service-to-service request
     
     Args:
         x_internal_secret: Shared secret from Next.js
         x_user_id: User ID from Next.js JWT
+        x_user_name: User name from Next.js JWT (optional)
         
     Returns:
-        Validated user ID
+        Tuple of (validated user ID, user name)
         
     Raises:
         HTTPException: If authentication fails
@@ -47,5 +49,5 @@ async def verify_internal_request(
             detail="Missing user ID"
         )
     
-    logger.debug(f"Verified internal request for user: {x_user_id}")
-    return x_user_id
+    logger.debug(f"Verified internal request for user: {x_user_id} ({x_user_name})")
+    return x_user_id, x_user_name

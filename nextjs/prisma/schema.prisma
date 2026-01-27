@@ -20,11 +20,47 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Relations
+  tasks     Task[]
+  projects  Project[]
+
   @@index([email])
 }
 
-model Task {
+model Project {
   id          String   @id @default(cuid())
+  name        String
+  description String?  @db.Text
+  status      ProjectStatus @default(ACTIVE)
+  isDefault   Boolean  @default(false)
+  
+  // Project timeline
+  startDate   DateTime?
+  endDate     DateTime?
+  dueDate     DateTime?
+  
+  // User association
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Relations
+  tasks       Task[]
+  
+  // Metadata
+  color       String?  // Hex color code for UI
+  icon        String?  // Icon name or emoji
+  tags        String[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Task {
+  id          Int      @id @default(autoincrement())
+  taskKey     String?  @unique // Human-friendly key like "CP-001"
   title       String
   description String?  @db.Text
   status      TaskStatus @default(TODO)
@@ -34,14 +70,22 @@ model Task {
   dueDate     DateTime?
   completedAt DateTime?
   
+  // User association
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Project association
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
   // Hierarchical structure
-  parentId    String?
+  parentId    Int?
   parent      Task?    @relation("TaskHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
   subtasks    Task[]   @relation("TaskHierarchy")
   
   // Task dependencies
-  dependsOn   TaskDependency[] @relation("DependentTask")
-  blockedBy   TaskDependency[] @relation("BlockingTask")
+  blockedBy   TaskDependency[] @relation("DependentTask")
+  blocks      TaskDependency[] @relation("BlockingTask")
   
   // Task notes
   notes       TaskNote[]
@@ -61,13 +105,15 @@ model Task {
   updatedAt   DateTime @updatedAt
 
   @@index([parentId])
+  @@index([userId])
+  @@index([projectId])
   @@index([status])
   @@index([dueDate])
 }
 
 model TaskNote {
   id        String   @id @default(cuid())
-  taskId    String
+  taskId    Int
   task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   
   content   String   @db.Text
@@ -82,9 +128,8 @@ model TaskNote {
 
 model TaskDependency {
   id            String   @id @default(cuid())
-  dependentId   String
-  blockingId    String
-  dependencyType DependencyType @default(FINISH_TO_START)
+  dependentId   Int
+  blockingId    Int
   
   dependent     Task     @relation("DependentTask", fields: [dependentId], references: [id], onDelete: Cascade)
   blocking      Task     @relation("BlockingTask", fields: [blockingId], references: [id], onDelete: Cascade)
@@ -190,13 +235,6 @@ enum AgentCallStatus {
   CANCELLED
 }
 
-enum DependencyType {
-  FINISH_TO_START
-  START_TO_START
-  FINISH_TO_FINISH
-  START_TO_FINISH
-}
-
 enum TaskStatus {
   TODO
   IN_PROGRESS
@@ -211,4 +249,12 @@ enum Priority {
   MEDIUM
   HIGH
   URGENT
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  ARCHIVED
+  CANCELLED
 }

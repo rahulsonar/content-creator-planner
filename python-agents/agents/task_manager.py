@@ -8,9 +8,11 @@ import json
 import traceback
 from agents.base import BaseAgent
 from config.prompts import PLANNING_SYSTEM_PROMPT
+from schemas.responses import TaskManagerResponse
 from utils.logger import logger
 from utils.task_inserter import insert_tasks_to_db
 from utils.task_updater import update_task_by_id, update_tasks_batch
+from utils.project_manager import insert_projects_to_db, get_project_by_id, list_projects
 from storage.database import db_manager
 from storage.agent_call_log import agent_call_logger
 
@@ -52,6 +54,9 @@ class UserTaskManagerAgent(BaseAgent):
             "tasks_updated": 0,
             "tasks_searched": 0,
             "notes_added": 0,
+            "projects_created": 0,
+            "projects_viewed": 0,
+            "projects_listed": 0,
             "agent_version": "1.0.0"
         }
 
@@ -63,7 +68,7 @@ class UserTaskManagerAgent(BaseAgent):
                 "type": "function",
                 "function": {
                     "name": "manage_tasks",
-                    "description": "Manage user's tasks with unified actions: create new tasks (with optional notes), search existing tasks, update task details, add notes to existing tasks, or get specific task information.",
+                    "description": "Manage user's tasks with unified actions: create new tasks (with optional notes), search existing tasks (supports keywords, status, priority, project, and label/tag filters), update task details, add notes to existing tasks, or get specific task information.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -79,6 +84,10 @@ class UserTaskManagerAgent(BaseAgent):
                                 "items": {
                                     "type": "object",
                                     "properties": {
+                                        "taskKey": {
+                                            "type": "string",
+                                            "description": "Optional human-friendly task key (e.g., 'CP-001'). If not provided, will be auto-generated."
+                                        },
                                         "title": {
                                             "type": "string",
                                             "description": "Task title (concise, actionable)"
@@ -87,27 +96,83 @@ class UserTaskManagerAgent(BaseAgent):
                                             "type": "string",
                                             "description": "Detailed task description with steps"
                                         },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["TODO", "IN_PROGRESS", "REVIEW", "BLOCKED", "COMPLETED", "CANCELLED"],
+                                            "description": "Task status (defaults to TODO)"
+                                        },
                                         "priority": {
                                             "type": "string",
                                             "enum": ["LOW", "MEDIUM", "HIGH", "URGENT"],
-                                            "description": "Task priority level"
+                                            "description": "Task priority level (defaults to MEDIUM)"
+                                        },
+                                        "startDate": {
+                                            "type": "string",
+                                            "description": "Task start date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)"
+                                        },
+                                        "endDate": {
+                                            "type": "string",
+                                            "description": "Task end date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)"
+                                        },
+                                        "dueDate": {
+                                            "type": "string",
+                                            "description": "Task due date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)"
                                         },
                                         "estimatedHours": {
                                             "type": "number",
                                             "description": "Estimated hours to complete"
                                         },
-                                        "researchNotes": {
-                                            "type": "string",
-                                            "description": "Research findings or reference materials"
+                                        "actualHours": {
+                                            "type": "number",
+                                            "description": "Actual hours spent on task"
                                         },
-                                        "aiReasoning": {
+                                        "projectId": {
                                             "type": "string",
-                                            "description": "Reasoning for including this task"
+                                            "description": "Project ID to attach this task to"
+                                        },
+                                        "parentId": {
+                                            "type": "integer",
+                                            "description": "Parent task ID for creating subtasks"
+                                        },
+                                        "assignedTo": {
+                                            "type": "string",
+                                            "description": "User ID or name of person assigned to this task"
+                                        },
+                                        "aiGenerated": {
+                                            "type": "boolean",
+                                            "description": "Whether this task was AI-generated"
+                                        },
+                                        "aiSuggestions": {
+                                            "type": "string",
+                                            "description": "AI suggestions for completing this task"
+                                        },
+                                        "aiContext": {
+                                            "type": "string",
+                                            "description": "AI context or reasoning for including this task"
                                         },
                                         "dependencies": {
                                             "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "taskId": {
+                                                        "type": "integer",
+                                                        "description": "ID of the related task"
+                                                    },
+                                                    "type": {
+                                                        "type": "string",
+                                                        "enum": ["blockedBy", "blocks"],
+                                                        "description": "Dependency type: 'blockedBy' means this task is blocked by the referenced task, 'blocks' means this task blocks the referenced task"
+                                                    }
+                                                },
+                                                "required": ["taskId", "type"]
+                                            },
+                                            "description": "List of task dependencies with blockedBy/blocks relationships"
+                                        },
+                                        "labels": {
+                                            "type": "array",
                                             "items": {"type": "string"},
-                                            "description": "List of task titles this depends on"
+                                            "description": "Labels to attach to this task"
                                         },
                                         "notes": {
                                             "type": "array",
@@ -134,7 +199,7 @@ class UserTaskManagerAgent(BaseAgent):
                             # For 'search' action
                             "keywords": {
                                 "type": "string",
-                                "description": "Search keywords (for 'search' action). Can search by title, description, status, or priority."
+                                "description": "Search keywords (for 'search' action). Matches title or description."
                             },
                             "status_filter": {
                                 "type": "string",
@@ -145,6 +210,14 @@ class UserTaskManagerAgent(BaseAgent):
                                 "type": "string",
                                 "enum": ["LOW", "MEDIUM", "HIGH", "URGENT", ""],
                                 "description": "Optional: Filter by task priority (for 'search' action). Leave empty for no filter."
+                            },
+                            "project_filter": {
+                                "type": "string",
+                                "description": "Optional: Filter by project ID (for 'search' action). Leave empty for no filter."
+                            },
+                            "tag_filter": {
+                                "type": "string",
+                                "description": "Optional: Filter by tag/label (for 'search' action). Leave empty for no filter."
                             },
                             # For 'update' action
                             "task_updates": {
@@ -179,6 +252,10 @@ class UserTaskManagerAgent(BaseAgent):
                                             "type": "number",
                                             "description": "Updated estimated hours"
                                         },
+                                        "projectId": {
+                                            "type": "string",
+                                            "description": "Updated project ID to attach this task to"
+                                        },
                                         "actualHours": {
                                             "type": "number",
                                             "description": "Updated actual hours spent"
@@ -202,6 +279,46 @@ class UserTaskManagerAgent(BaseAgent):
                                         "assignedTo": {
                                             "type": "string",
                                             "description": "Updated assigned person"
+                                        },
+                                        "parentId": {
+                                            "type": "integer",
+                                            "description": "Updated parent task ID"
+                                        },
+                                        "aiGenerated": {
+                                            "type": "boolean",
+                                            "description": "Updated AI-generated flag"
+                                        },
+                                        "aiSuggestions": {
+                                            "type": "string",
+                                            "description": "Updated AI suggestions"
+                                        },
+                                        "aiContext": {
+                                            "type": "string",
+                                            "description": "Updated AI context"
+                                        },
+                                        "labels": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "description": "Updated labels to attach (replaces existing labels)"
+                                        },
+                                        "dependencies": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "taskId": {
+                                                        "type": "integer",
+                                                        "description": "ID of the related task"
+                                                    },
+                                                    "type": {
+                                                        "type": "string",
+                                                        "enum": ["blockedBy", "blocks"],
+                                                        "description": "Dependency type: 'blockedBy' means this task is blocked by the referenced task, 'blocks' means this task blocks the referenced task"
+                                                    }
+                                                },
+                                                "required": ["taskId", "type"]
+                                            },
+                                            "description": "Updated dependencies with blockedBy/blocks relationships (replaces existing dependencies)"
                                         }
                                     }
                                 }
@@ -229,6 +346,88 @@ class UserTaskManagerAgent(BaseAgent):
                                     },
                                     "required": ["content"]
                                 }
+                            }
+                        },
+                        "required": ["action"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "manage_projects",
+                    "description": "Manage user's projects with unified actions: create new projects, view a specific project, or list all projects with optional status filter.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["create", "view", "list"],
+                                "description": "Project operation to perform"
+                            },
+                            # For 'create' action
+                            "projects": {
+                                "type": "array",
+                                "description": "Array of new projects to create (for 'create' action)",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "string",
+                                            "description": "Project name (concise, descriptive)"
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "Detailed project description"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": ["ACTIVE", "ON_HOLD", "COMPLETED", "ARCHIVED", "CANCELLED"],
+                                            "description": "Project status (defaults to ACTIVE)"
+                                        },
+                                        "color": {
+                                            "type": "string",
+                                            "description": "Hex color code for UI (e.g., #FF5733)"
+                                        },
+                                        "icon": {
+                                            "type": "string",
+                                            "description": "Icon name or emoji for UI (e.g., 📹, 🎬)"
+                                        },
+                                        "tags": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "description": "Project tags for categorization"
+                                        },
+                                        "startDate": {
+                                            "type": "string",
+                                            "description": "Project start date (ISO format: YYYY-MM-DD)"
+                                        },
+                                        "endDate": {
+                                            "type": "string",
+                                            "description": "Project end date (ISO format: YYYY-MM-DD)"
+                                        },
+                                        "dueDate": {
+                                            "type": "string",
+                                            "description": "Project due date (ISO format: YYYY-MM-DD)"
+                                        },
+                                        "isDefault": {
+                                            "type": "boolean",
+                                            "description": "Whether this project should be the default"
+                                        }
+                                    },
+                                    "required": ["name"]
+                                }
+                            },
+                            # For 'view' action
+                            "project_id": {
+                                "type": "string",
+                                "description": "Project ID to view (for 'view' action)"
+                            },
+                            # For 'list' action
+                            "status_filter": {
+                                "type": "string",
+                                "enum": ["ACTIVE", "ON_HOLD", "COMPLETED", "ARCHIVED", "CANCELLED", ""],
+                                "description": "Optional: Filter projects by status (for 'list' action). Leave empty for no filter."
                             }
                         },
                         "required": ["action"]
@@ -288,8 +487,13 @@ class UserTaskManagerAgent(BaseAgent):
     def _initialize_system_prompt(self):
         """Initialize the agent with system prompts"""
         #self.add_to_history("system", PLANNING_SYSTEM_PROMPT)
-        self.add_to_history("system", """You are a task management specialist. Handle task creation, updates, and searches efficiently.""")
+        self.add_to_history("system", """You are a task and project management specialist. Handle task creation, updates, searches, and project management (create, view, list) efficiently.""")
         self.add_to_history("system", "Always provide clear summaries of actions taken.")
+        
+        # For Anthropic clients, explicitly mention tool availability
+        is_anthropic = hasattr(self.model_client, 'client_type') and self.model_client.client_type == 'anthropic'
+        if is_anthropic:
+            self.add_to_history("system", "You have manage_tasks and manage_projects tools available - use them to complete all operations.")
 
     def update_metadata(self, **kwargs):
         """Update metadata fields and track last activity"""
@@ -318,8 +522,8 @@ class UserTaskManagerAgent(BaseAgent):
         return (
             f"agent={m['agent_name']}, conv={m['conversation_id']}, "
             f"user={m['user_id']}, msgs={m['total_messages']}, "
-            f"tools={m['tool_calls_count']}, created={m['tasks_created']}, "
-            f"updated={m['tasks_updated']}"
+            f"tools={m['tool_calls_count']}, tasks_created={m['tasks_created']}, "
+            f"tasks_updated={m['tasks_updated']}, projects_created={m['projects_created']}"
         )
 
     async def process_message(
@@ -390,7 +594,7 @@ class UserTaskManagerAgent(BaseAgent):
 
         try:
             # Iterative tool calling loop - continue until agent stops calling tools
-            max_iterations = 5  # Prevent infinite loops
+            max_iterations = 20  # Prevent infinite loops
             iteration = 0
             
             while iteration < max_iterations:
@@ -585,21 +789,26 @@ class UserTaskManagerAgent(BaseAgent):
             try:
                 if tool_name == "manage_tasks":
                     result = await self._handle_manage_tasks(tool_args)
+                elif tool_name == "manage_projects":
+                    result = await self._handle_manage_projects(tool_args)
                 else:
-                    result = f"Unknown tool: {tool_name}"
+                    result = {"status": "error", "message": f"Unknown tool: {tool_name}", "error": f"Unknown tool: {tool_name}"}
                 
                 logger.info(f"Tool {tool_name} completed successfully")
+                # Convert dict result to JSON string for agent history
+                result_str = json.dumps(result) if isinstance(result, dict) else str(result)
                 results.append({
                     "tool_call_id": tool_call.id,
-                    "result": result,
+                    "result": result_str,
                     "success": True,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             except Exception as e:
                 logger.error(f"Tool execution failed: {tool_name} - {e}", exc_info=True)
+                error_result = {"status": "error", "message": f"Error executing tool", "error": str(e)}
                 results.append({
                     "tool_call_id": tool_call.id,
-                    "result": f"Error executing tool: {str(e)}",
+                    "result": json.dumps(error_result),
                     "success": False,
                     "error": str(e),
                     "timestamp": datetime.now(timezone.utc).isoformat()
@@ -614,8 +823,8 @@ class UserTaskManagerAgent(BaseAgent):
         
         return results
 
-    async def _handle_manage_tasks(self, args: Dict[str, Any]) -> str:
-        """Handle manage_tasks tool with action routing"""
+    async def _handle_manage_tasks(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle manage_tasks tool with action routing and return structured response"""
         action = args.get("action")
         
         logger.info(f"[TASK_MANAGER] Manage tasks action: {action}, args: {args}")
@@ -626,7 +835,9 @@ class UserTaskManagerAgent(BaseAgent):
             return await self._search_tasks(
                 args.get("keywords", ""),
                 args.get("status_filter", ""),
-                args.get("priority_filter", "")
+                args.get("priority_filter", ""),
+                args.get("project_filter", ""),
+                args.get("tag_filter", "")
             )
         elif action == "update":
             return await self._update_tasks(args.get("task_updates", []))
@@ -635,40 +846,90 @@ class UserTaskManagerAgent(BaseAgent):
         elif action == "add_notes":
             return await self._add_notes(args.get("task_id", ""), args.get("notes", []))
         else:
-            return f"Unknown action: {action}"
+            return {
+                "status": "error",
+                "message": f"Unknown action: {action}",
+                "error": f"Unknown action: {action}"
+            }
 
-    async def _create_tasks(self, tasks: List[Dict[str, Any]]) -> str:
-        """Create new tasks in database"""
+    async def _create_tasks(self, tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create new tasks in database and return structured response"""
         if not tasks:
-            return "No tasks provided to create."
+            return {
+                "status": "error",
+                "action": "create",
+                "message": "No tasks provided to create",
+                "error": "Empty task list"
+            }
+        
+        if not self._current_user_id:
+            logger.error("No user_id available for task creation")
+            return {
+                "status": "error",
+                "action": "create",
+                "message": "Failed to create tasks",
+                "error": "User ID is required to create tasks"
+            }
         
         try:
-            logger.info(f"Creating {len(tasks)} tasks")
-            result = await insert_tasks_to_db(tasks)
+            for task in tasks:
+                if isinstance(task, dict) and "labels" in task and "tags" not in task:
+                    task["tags"] = task.get("labels")
+            logger.info(f"Creating {len(tasks)} tasks for user {self._current_user_id}")
+            result = await insert_tasks_to_db(tasks, user_id=self._current_user_id)
             self.metadata["tasks_created"] += len(tasks)
             
             if result.get("success"):
                 created_ids = result.get("created_ids", [])
-                summary = f"✓ Created {len(tasks)} tasks successfully"
-                if created_ids:
-                    summary += f" (IDs: {', '.join(str(id)[:8] for id in created_ids)})"
-                logger.info(summary)
-                return summary
+                logger.info(f"Successfully created {len(tasks)} tasks")
+                return {
+                    "status": "success",
+                    "action": "create",
+                    "message": f"Created {len(tasks)} tasks successfully. To attach to a project, include projectId in each task",
+                    "data": {
+                        "created_count": len(tasks),
+                        "task_ids": [str(id) for id in created_ids]
+                    }
+                }
             else:
                 error_msg = result.get("error", "Unknown error")
                 logger.error(f"Task creation failed: {error_msg}")
-                return f"✗ Failed to create tasks: {error_msg}"
+                return {
+                    "status": "error",
+                    "action": "create",
+                    "message": "Failed to create tasks",
+                    "error": error_msg
+                }
         except Exception as e:
             logger.error(f"Exception creating tasks: {e}", exc_info=True)
-            return f"✗ Error creating tasks: {str(e)}"
+            return {
+                "status": "error",
+                "action": "create",
+                "message": "Error creating tasks",
+                "error": str(e)
+            }
 
-    async def _search_tasks(self, keywords: str = "", status_filter: str = "", priority_filter: str = "") -> str:
-        """Search tasks by keywords and filters"""
+    async def _search_tasks(
+        self,
+        keywords: str = "",
+        status_filter: str = "",
+        priority_filter: str = "",
+        project_filter: str = "",
+        tag_filter: str = ""
+    ) -> Dict[str, Any]:
+        """Search tasks by keywords and filters and return structured response"""
         import asyncpg
         from config.settings import settings
         
         # Log search query parameters
-        logger.info(f"Search query - keywords: '{keywords}', status: '{status_filter}', priority: '{priority_filter}'")
+        logger.info(
+            "Search query - keywords: '%s', status: '%s', priority: '%s', project: '%s', tag: '%s'",
+            keywords,
+            status_filter,
+            priority_filter,
+            project_filter,
+            tag_filter
+        )
         
         conn = None
         try:
@@ -681,6 +942,15 @@ class UserTaskManagerAgent(BaseAgent):
             params = []
             param_index = 1
             
+            # CRITICAL: Add user_id filter to only show user's tasks
+            if self._current_user_id:
+                where_clauses.append(f't."userId" = ${param_index}')
+                params.append(self._current_user_id)
+                param_index += 1
+                logger.info(f"Filtering tasks by user_id: {self._current_user_id}")
+            else:
+                logger.warning("No user_id available - returning all tasks (this should not happen)")
+            
             # Add status filter
             if status_filter and status_filter.strip():
                 where_clauses.append(f'status = ${param_index}')
@@ -691,6 +961,26 @@ class UserTaskManagerAgent(BaseAgent):
             if priority_filter and priority_filter.strip():
                 where_clauses.append(f'priority = ${param_index}')
                 params.append(priority_filter)
+                param_index += 1
+
+            # Add project filter
+            if project_filter and project_filter.strip():
+                where_clauses.append(f't."projectId" = ${param_index}')
+                params.append(project_filter)
+                param_index += 1
+
+            # Add keyword filter (title OR description)
+            if keywords and keywords.strip():
+                where_clauses.append(f'(t.title ILIKE ${param_index} OR t.description ILIKE ${param_index})')
+                params.append(f"%{keywords.strip()}%")
+                param_index += 1
+
+            # Add tag/label filter (matches any tag in array)
+            if tag_filter and tag_filter.strip():
+                where_clauses.append(
+                    f'EXISTS (SELECT 1 FROM unnest(t.tags) tag WHERE tag ILIKE ${param_index})'
+                )
+                params.append(tag_filter.strip())
                 param_index += 1
             
             # Build WHERE clause
@@ -718,135 +1008,164 @@ class UserTaskManagerAgent(BaseAgent):
             
             rows = await conn.fetch(query, *params)
             
-            # Filter by keywords in both title AND description if provided
-            if keywords and keywords.strip():
-                keywords_lower = keywords.lower()
-                logger.info(f"Filtering tasks by keywords in title and description: '{keywords_lower}'")
-                filtered_rows = []
-                for row in rows:
-                    title = (row['title'] or "").lower()
-                    description = (row['description'] or "").lower()
-                    # Search in both title AND description
-                    if keywords_lower in title or keywords_lower in description:
-                        filtered_rows.append(row)
-                logger.info(f"Keywords filter: {len(rows)} tasks -> {len(filtered_rows)} tasks matched")
-                rows = filtered_rows
-            
-            # If no results found, fetch all tasks and note the fallback
-            fallback_occurred = False
-            if not rows:
-                logger.info("No tasks matched search criteria, returning all tasks")
-                fallback_occurred = True
-                all_tasks_query = """
-                    SELECT t.id, t.title, t.description, t.status, t.priority, 
-                           t."estimatedHours", t."actualHours", t."startDate", t."endDate",
-                           t."dueDate", t."createdAt", t."updatedAt",
-                           json_agg(
-                               json_build_object(
-                                   'id', tn.id,
-                                   'content', tn.content,
-                                   'createdBy', tn."createdBy",
-                                   'createdAt', tn."createdAt"
-                               ) ORDER BY tn."createdAt" DESC
-                           ) FILTER (WHERE tn.id IS NOT NULL) as notes
-                    FROM "Task" t
-                    LEFT JOIN "TaskNote" tn ON t.id = tn."taskId"
-                    GROUP BY t.id
-                    ORDER BY t."createdAt" DESC
-                    LIMIT 100
-                """
-                rows = await conn.fetch(all_tasks_query)
-            
             self.metadata["tasks_searched"] += 1
             
-            # Format task list
-            if fallback_occurred:
-                summary = f"No tasks matched the search criteria (keywords: '{keywords}', status: '{status_filter}', priority: '{priority_filter}'). Showing all {len(rows)} task(s) instead:\n"
-            else:
-                summary = f"Found {len(rows)} task(s):\n"
-            for row in rows[:10]:  # Limit to 10 tasks
-                task_id = row['id']
-                title = row['title']
-                status = row['status']
-                priority = row['priority']
+            # Build task list
+            tasks = []
+            for row in rows:
+                task_dict = {
+                    "id": str(row['id']),
+                    "title": row['title'],
+                    "status": row['status'],
+                    "priority": row['priority'],
+                    "estimatedHours": row['estimatedHours'],
+                    "actualHours": row['actualHours'],
+                    "dueDate": str(row['dueDate']) if row['dueDate'] else None,
+                    "notesCount": 0
+                }
                 
-                # Safely count notes with type checking
-                notes_count = 0
+                # Count notes safely
                 if row['notes']:
                     notes = row['notes']
                     if isinstance(notes, str):
                         try:
                             notes = json.loads(notes)
-                            notes_count = len(notes) if isinstance(notes, list) else 0
+                            task_dict["notesCount"] = len(notes) if isinstance(notes, list) else 0
                         except json.JSONDecodeError:
-                            notes_count = 0
+                            pass
                     elif isinstance(notes, list):
-                        notes_count = len(notes)
+                        task_dict["notesCount"] = len(notes)
                 
-                notes_suffix = f" [{notes_count} notes]" if notes_count > 0 else ""
-                summary += f"  • [{status}] {title} (Priority: {priority}, ID: {task_id}){notes_suffix}\n"
-            
-            if len(rows) > 10:
-                summary += f"  ... and {len(rows) - 10} more tasks"
+                tasks.append(task_dict)
             
             logger.info(f"Search returned {len(rows)} tasks")
-            return summary
+            
+            return {
+                "status": "success",
+                "action": "search",
+                "message": f"Found {len(rows)} task(s)",
+                "data": {
+                    "total_count": len(rows),
+                    "returned_count": min(len(rows), 100),
+                    "tasks": tasks
+                }
+            }
             
         except Exception as e:
             logger.error(f"Search failed: {e}", exc_info=True)
-            return f"✗ Error searching tasks: {str(e)}"
+            return {
+                "status": "error",
+                "action": "search",
+                "message": "Error searching tasks",
+                "error": str(e)
+            }
         finally:
             if conn:
                 await conn.close()
 
-    async def _update_tasks(self, task_updates: List[Dict[str, Any]]) -> str:
-        """Update existing tasks"""
+    async def _update_tasks(self, task_updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Update existing tasks and return structured response"""
         if not task_updates:
-            return "No task updates provided."
+            return {
+                "status": "error",
+                "action": "update",
+                "message": "No task updates provided",
+                "error": "Empty updates list"
+            }
         
         try:
             logger.info(f"Updating {len(task_updates)} tasks")
             success_count = 0
+            failed_updates = []
             
             for update in task_updates:
                 task_id = update.get("id")
                 if not task_id:
                     logger.warning("Task update missing ID, skipping")
+                    failed_updates.append({"error": "Missing task ID"})
                     continue
                 
                 # Remove id from update dict before passing to updater
                 update_data = {k: v for k, v in update.items() if k != "id"}
+                if "labels" in update_data and "tags" not in update_data:
+                    update_data["tags"] = update_data.get("labels")
+                    update_data.pop("labels", None)
                 
-                result = await update_task_by_id(task_id, update_data)
+                result = await update_task_by_id(task_id, update_data, user_id=self._current_user_id)
                 if result:  # result is a boolean
                     success_count += 1
                 else:
                     logger.warning(f"Failed to update task {task_id}")
+                    failed_updates.append({"task_id": task_id, "error": "Update failed"})
             
             self.metadata["tasks_updated"] += success_count
             
-            summary = f"✓ Updated {success_count}/{len(task_updates)} tasks successfully"
-            logger.info(summary)
-            return summary
+            logger.info(f"Updated {success_count}/{len(task_updates)} tasks")
+            
+            return {
+                "status": "success" if success_count == len(task_updates) else "partial",
+                "action": "update",
+                "message": f"Updated {success_count}/{len(task_updates)} tasks successfully",
+                "data": {
+                    "updated_count": success_count,
+                    "total_count": len(task_updates),
+                    "failed_count": len(failed_updates),
+                    "failed_updates": failed_updates if failed_updates else None
+                }
+            }
         except Exception as e:
             logger.error(f"Exception updating tasks: {e}", exc_info=True)
-            return f"✗ Error updating tasks: {str(e)}"
+            return {
+                "status": "error",
+                "action": "update",
+                "message": "Error updating tasks",
+                "error": str(e)
+            }
 
-    async def _get_task(self, task_id: str) -> str:
-        """Get a specific task"""
+    async def _get_task(self, task_id: str) -> Dict[str, Any]:
+        """Get a specific task and return structured response"""
         import asyncpg
         from config.settings import settings
         
         if not task_id:
-            return "Error: task_id is required"
+            return {
+                "status": "error",
+                "action": "get_one",
+                "message": "Task ID is required",
+                "error": "Missing task_id parameter"
+            }
         
         conn = None
         try:
+            # Convert task_id to integer (Task.id is Int in schema)
+            try:
+                task_id_int = int(task_id)
+            except (ValueError, TypeError):
+                return {
+                    "status": "error",
+                    "action": "get_one",
+                    "message": f"Invalid task ID: {task_id}",
+                    "error": "Task ID must be a valid integer"
+                }
+            
             # Connect to database
             db_url = settings.DATABASE_URL
             conn = await asyncpg.connect(db_url)
             
-            query = """
+            # Build WHERE clause with user_id filter for security
+            where_clauses = ["t.id = $1"]
+            params = [task_id_int]
+            
+            if self._current_user_id:
+                where_clauses.append('t."userId" = $2')
+                params.append(self._current_user_id)
+                logger.info(f"Fetching task {task_id} for user {self._current_user_id}")
+            else:
+                logger.warning("No user_id available for task retrieval")
+            
+            where_sql = " AND ".join(where_clauses)
+            
+            query = f"""
                 SELECT t.id, t.title, t.description, t.status, t.priority, 
                        t."estimatedHours", t."actualHours", t."startDate", t."endDate",
                        t."dueDate", t."createdAt", t."updatedAt",
@@ -857,81 +1176,137 @@ class UserTaskManagerAgent(BaseAgent):
                                'createdBy', tn."createdBy",
                                'createdAt', tn."createdAt"
                            ) ORDER BY tn."createdAt" DESC
-                       ) FILTER (WHERE tn.id IS NOT NULL) as notes
+                       ) FILTER (WHERE tn.id IS NOT NULL) as notes,
+                       json_agg(
+                           json_build_object(
+                               'taskId', td_blocked."blockingId",
+                               'type', 'blockedBy'
+                           )
+                       ) FILTER (WHERE td_blocked.id IS NOT NULL) as blocked_by,
+                       json_agg(
+                           json_build_object(
+                               'taskId', td_blocks."dependentId",
+                               'type', 'blocks'
+                           )
+                       ) FILTER (WHERE td_blocks.id IS NOT NULL) as blocks
                 FROM "Task" t
                 LEFT JOIN "TaskNote" tn ON t.id = tn."taskId"
-                WHERE t.id = $1
+                LEFT JOIN "TaskDependency" td_blocked ON t.id = td_blocked."dependentId"
+                LEFT JOIN "TaskDependency" td_blocks ON t.id = td_blocks."blockingId"
+                WHERE {where_sql}
                 GROUP BY t.id
             """
             
-            logger.info(f"Fetching task with ID: {task_id}")
-            row = await conn.fetchrow(query, task_id)
+            row = await conn.fetchrow(query, *params)
             
             if not row:
                 logger.warning(f"Task not found: {task_id}")
-                return f"Task {task_id} not found"
+                return {
+                    "status": "error",
+                    "action": "get_one",
+                    "message": f"Task {task_id} not found",
+                    "error": "Task does not exist or access denied"
+                }
             
-            # Safely extract values with type checking
-            description = str(row['description'] or "")
-            desc_preview = description[:100] + "..." if len(description) > 100 else description
+            # Build task data
+            task_data = {
+                "id": str(row['id']),
+                "title": row['title'],
+                "description": row['description'] or "",
+                "status": row['status'],
+                "priority": row['priority'],
+                "estimatedHours": row['estimatedHours'],
+                "actualHours": row['actualHours'],
+                "startDate": str(row['startDate']) if row['startDate'] else None,
+                "endDate": str(row['endDate']) if row['endDate'] else None,
+                "dueDate": str(row['dueDate']) if row['dueDate'] else None,
+                "createdAt": str(row['createdAt']),
+                "updatedAt": str(row['updatedAt']),
+                "notes": [],
+                "dependencies": []
+            }
             
-            # Format notes if present
-            notes_text = ""
+            # Parse notes if present
             if row['notes']:
-                # Parse notes if they're a JSON string
                 notes = row['notes']
                 if isinstance(notes, str):
                     try:
                         notes = json.loads(notes)
                     except json.JSONDecodeError:
-                        logger.warning(f"Failed to parse notes JSON: {notes}")
+                        logger.warning(f"Failed to parse notes JSON for task {task_id}")
                         notes = []
                 
-                if notes:
-                    notes_text = f"\n  • Notes ({len(notes)}):"
-                    for note in notes[:3]:  # Show first 3 notes
-                        # Handle both dict and string cases
-                        if isinstance(note, dict):
-                            note_content = str(note.get('content', ''))
-                        elif isinstance(note, str):
-                            note_content = note
-                        else:
-                            note_content = str(note)
-                        
-                        note_preview = note_content[:80] + "..." if len(note_content) > 80 else note_content
-                        notes_text += f"\n    - {note_preview}"
-                    if len(notes) > 3:
-                        notes_text += f"\n    ... and {len(notes) - 3} more notes"
+                if isinstance(notes, list):
+                    task_data["notes"] = notes
             
-            summary = f"""Task Details:
-  • ID: {row['id']}
-  • Title: {row['title']}
-  • Status: {row['status']}
-  • Priority: {row['priority']}
-  • Estimated: {row['estimatedHours']}h
-  • Actual: {row['actualHours']}h
-  • Description: {desc_preview}{notes_text}"""
+            # Parse blocked_by dependencies
+            if row['blocked_by']:
+                blocked_by = row['blocked_by']
+                if isinstance(blocked_by, str):
+                    try:
+                        blocked_by = json.loads(blocked_by)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse blocked_by JSON for task {task_id}")
+                        blocked_by = []
+                
+                if isinstance(blocked_by, list):
+                    task_data["dependencies"].extend(blocked_by)
+            
+            # Parse blocks dependencies
+            if row['blocks']:
+                blocks = row['blocks']
+                if isinstance(blocks, str):
+                    try:
+                        blocks = json.loads(blocks)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse blocks JSON for task {task_id}")
+                        blocks = []
+                
+                if isinstance(blocks, list):
+                    task_data["dependencies"].extend(blocks)
+
             
             logger.info(f"Successfully retrieved task: {task_id}")
-            return summary
+            
+            return {
+                "status": "success",
+                "action": "get_one",
+                "message": f"Retrieved task {task_id}",
+                "data": task_data
+            }
             
         except Exception as e:
             logger.error(f"Error fetching task {task_id}: {e}", exc_info=True)
-            return f"Error retrieving task: {str(e)}"
+            return {
+                "status": "error",
+                "action": "get_one",
+                "message": f"Error retrieving task {task_id}",
+                "error": str(e)
+            }
         finally:
             if conn:
                 await conn.close()
 
-    async def _add_notes(self, task_id: str, notes: List[Dict[str, Any]]) -> str:
-        """Add notes to an existing task"""
+    async def _add_notes(self, task_id: str, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Add notes to an existing task and return structured response"""
         import asyncpg
         from config.settings import settings
         
         if not task_id:
-            return "Error: task_id is required"
+            return {
+                "status": "error",
+                "action": "add_notes",
+                "message": "Task ID is required",
+                "error": "Missing task_id parameter"
+            }
         
         if not notes:
-            return "Error: at least one note is required"
+            return {
+                "status": "error",
+                "action": "add_notes",
+                "message": "At least one note is required",
+                "error": "Empty notes list"
+            }
         
         conn = None
         try:
@@ -939,10 +1314,25 @@ class UserTaskManagerAgent(BaseAgent):
             db_url = settings.DATABASE_URL
             conn = await asyncpg.connect(db_url)
             
-            # Verify task exists
-            task_check = await conn.fetchval('SELECT id FROM "Task" WHERE id = $1', task_id)
+            # Verify task exists and belongs to user
+            if self._current_user_id:
+                task_check = await conn.fetchval(
+                    'SELECT id FROM "Task" WHERE id = $1 AND "userId" = $2',
+                    task_id,
+                    self._current_user_id
+                )
+            else:
+                task_check = await conn.fetchval('SELECT id FROM "Task" WHERE id = $1', task_id)
+                logger.warning("No user_id available for task note verification")
+            
             if not task_check:
-                return f"Task {task_id} not found"
+                logger.warning(f"Task {task_id} not found or access denied for user {self._current_user_id}")
+                return {
+                    "status": "error",
+                    "action": "add_notes",
+                    "message": f"Task {task_id} not found or access denied",
+                    "error": "Task does not exist or access denied"
+                }
             
             # Insert notes
             notes_added = 0
@@ -968,13 +1358,238 @@ class UserTaskManagerAgent(BaseAgent):
             
             self.metadata["notes_added"] += notes_added
             
-            summary = f"✓ Added {notes_added} note(s) to task {task_id[:8]}..."
-            logger.info(summary)
-            return summary
+            logger.info(f"Added {notes_added} notes to task {task_id}")
+            
+            return {
+                "status": "success",
+                "action": "add_notes",
+                "message": f"Added {notes_added} note(s) to task {task_id}",
+                "data": {
+                    "task_id": task_id,
+                    "notes_added": notes_added
+                }
+            }
             
         except Exception as e:
             logger.error(f"Error adding notes to task {task_id}: {e}", exc_info=True)
-            return f"✗ Error adding notes: {str(e)}"
+            return {
+                "status": "error",
+                "action": "add_notes",
+                "message": "Error adding notes",
+                "error": str(e)
+            }
         finally:
             if conn:
                 await conn.close()
+
+    async def _handle_manage_projects(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle manage_projects tool with action routing and return structured response"""
+        action = args.get("action")
+        
+        logger.info(f"[TASK_MANAGER] Manage projects action: {action}, args: {args}")
+        
+        if action == "create":
+            return await self._create_projects(args.get("projects", []))
+        elif action == "view":
+            return await self._view_project(args.get("project_id", ""))
+        elif action == "list":
+            return await self._list_projects(args.get("status_filter", ""))
+        else:
+            return {
+                "status": "error",
+                "message": f"Unknown action: {action}",
+                "error": f"Unknown action: {action}"
+            }
+
+    async def _create_projects(self, projects: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create new projects in database and return structured response"""
+        if not projects:
+            return {
+                "status": "error",
+                "action": "create",
+                "message": "No projects provided to create",
+                "error": "Empty projects list"
+            }
+        
+        if not self._current_user_id:
+            logger.error("No user_id available for project creation")
+            return {
+                "status": "error",
+                "action": "create",
+                "message": "Failed to create projects",
+                "error": "User ID is required to create projects"
+            }
+        
+        try:
+            logger.info(f"Creating {len(projects)} project(s) for user {self._current_user_id}")
+            result = await insert_projects_to_db(projects, user_id=self._current_user_id)
+            
+            if result.get("success"):
+                created_ids = result.get("created_ids", [])
+                self.metadata["projects_created"] += len(created_ids)
+
+                logger.info(f"Created {len(created_ids)} project(s)")
+                
+                return {
+                    "status": "success",
+                    "action": "create",
+                    "message": f"Created {len(created_ids)} project(s) successfully",
+                    "data": {
+                        "created_count": len(created_ids),
+                        "project_ids": [str(id) for id in created_ids]
+                    }
+                }
+            else:
+                error_msg = result.get("error", "Unknown error")
+                logger.error(f"Project creation failed: {error_msg}")
+                return {
+                    "status": "error",
+                    "action": "create",
+                    "message": "Failed to create projects",
+                    "error": error_msg
+                }
+        except Exception as e:
+            logger.error(f"Exception creating projects: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "action": "create",
+                "message": "Error creating projects",
+                "error": str(e)
+            }
+
+    async def _view_project(self, project_id: str) -> Dict[str, Any]:
+        """Get a specific project with task statistics and return structured response"""
+        if not project_id:
+            return {
+                "status": "error",
+                "action": "view",
+                "message": "Project ID is required",
+                "error": "Missing project_id parameter"
+            }
+        
+        try:
+            logger.info(f"Fetching project {project_id} for user {self._current_user_id}")
+            result = await get_project_by_id(project_id, user_id=self._current_user_id)
+            
+            if not result.get("success"):
+                error_msg = result.get("error", "Unknown error")
+                logger.warning(f"Project not found or error: {error_msg}")
+                return {
+                    "status": "error",
+                    "action": "view",
+                    "message": f"Project {project_id} not found",
+                    "error": error_msg
+                }
+            
+            project = result.get("project", {})
+            self.metadata["projects_viewed"] += 1
+            
+            # Build project data
+            project_data = {
+                "id": project['id'],
+                "name": project['name'],
+                "status": project['status'],
+                "description": project.get('description', ''),
+                "taskCount": project.get('task_count', 0),
+                "completedTasks": project.get('completed_tasks', 0),
+                "color": project.get('color'),
+                "icon": project.get('icon'),
+                "tags": project.get('tags', []),
+                "createdAt": str(project.get('createdAt', '')),
+                "startDate": str(project.get('startDate', '')) if project.get('startDate') else None,
+                "dueDate": str(project.get('dueDate', '')) if project.get('dueDate') else None,
+                "endDate": str(project.get('endDate', '')) if project.get('endDate') else None
+            }
+            
+            logger.info(f"Successfully retrieved project: {project_id}")
+            
+            return {
+                "status": "success",
+                "action": "view",
+                "message": f"Retrieved project {project_id}",
+                "data": project_data
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching project {project_id}: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "action": "view",
+                "message": "Error retrieving project",
+                "error": str(e)
+            }
+
+    async def _list_projects(self, status_filter: str = "") -> Dict[str, Any]:
+        """List all projects with optional status filter and return structured response"""
+        try:
+            logger.info(f"Listing projects with status filter: '{status_filter}'")
+            result = await list_projects(
+                user_id=self._current_user_id,
+                status_filter=status_filter
+            )
+            
+            if not result.get("success"):
+                error_msg = result.get("error", "Unknown error")
+                logger.error(f"Failed to list projects: {error_msg}")
+                return {
+                    "status": "error",
+                    "action": "list",
+                    "message": "Error listing projects",
+                    "error": error_msg
+                }
+            
+            projects = result.get("projects", [])
+            self.metadata["projects_listed"] += 1
+            
+            if not projects:
+                filter_msg = f" with status '{status_filter}'" if status_filter else ""
+                return {
+                    "status": "success",
+                    "action": "list",
+                    "message": f"No projects found{filter_msg}",
+                    "data": {
+                        "total_count": 0,
+                        "projects": []
+                    }
+                }
+            
+            # Build project list
+            project_list = []
+            for project in projects:
+                task_count = project.get('task_count', 0)
+                completed_tasks = project.get('completed_tasks', 0)
+                completion_pct = int((completed_tasks / task_count) * 100) if task_count > 0 else 0
+                
+                project_dict = {
+                    "id": project['id'],
+                    "name": project['name'],
+                    "status": project['status'],
+                    "taskCount": task_count,
+                    "completedTasks": completed_tasks,
+                    "completionPercentage": completion_pct,
+                    "icon": project.get('icon', '📁'),
+                    "color": project.get('color')
+                }
+                project_list.append(project_dict)
+            
+            logger.info(f"Found {len(projects)} projects")
+            
+            return {
+                "status": "success",
+                "action": "list",
+                "message": f"Found {len(projects)} project(s)",
+                "data": {
+                    "total_count": len(projects),
+                    "returned_count": min(len(projects), 100),
+                    "projects": project_list
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error listing projects: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "action": "list",
+                "message": "Error listing projects",
+                "error": str(e)
+            }

@@ -10,7 +10,7 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Public routes that don't require authentication
-  const publicRoutes = ['/login', '/api/auth/login', '/api/auth/signup', '/api/auth/logout'];
+  const publicRoutes = ['/login', '/api/auth/login', '/api/auth/signup', '/api/auth/logout', '/api/auth/me'];
   
   // Internal webhook route - uses X-Internal-Secret header instead of JWT
   if (pathname === '/api/chat/webhook') {
@@ -39,8 +39,17 @@ export function middleware(request: NextRequest) {
   try {
     // Verify token - dynamic import to ensure it works in Node runtime
     const jwt = require('jsonwebtoken');
-    jwt.verify(token, JWT_SECRET);
-    return NextResponse.next();
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string; name?: string };
+    
+    // Create a new response with the user info in headers
+    const response = NextResponse.next();
+    response.headers.set('x-user-id', decoded.userId);
+    response.headers.set('x-user-email', decoded.email);
+    if (decoded.name) {
+      response.headers.set('x-user-name', decoded.name);
+    }
+    
+    return response;
   } catch (error) {
     // Invalid token
     if (pathname.startsWith('/api/')) {

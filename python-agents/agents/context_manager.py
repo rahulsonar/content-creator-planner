@@ -3,6 +3,7 @@ Context Manager Agent
 Manages user context history in structured markdown files
 """
 from typing import Dict, Any, Optional, List
+import asyncio
 from datetime import datetime, timezone
 import uuid
 from agents.base import BaseAgent
@@ -31,6 +32,7 @@ class ContextManagerAgent(BaseAgent):
         """
         super().__init__(model_client, "context_manager")
         self.current_user_id = None  # Will be set during process_message
+        self.current_user_name = None  # Will be set during process_message
         self.db_session = db_session
         self._current_agent_call_log_id = None  # Track current agent call log
         self._tool_calls_log = []  # Track tool calls for logging
@@ -39,7 +41,6 @@ class ContextManagerAgent(BaseAgent):
         # Initialize metadata
         self.metadata = {
             "agent_name": "context_manager",
-            "agent_type": "context_management",
             "conversation_id": None,
             "user_id": None,
             "session_id": None,
@@ -69,31 +70,23 @@ class ContextManagerAgent(BaseAgent):
             {
                 "type": "function",
                 "function": {
-                    "name": "manage_context",
-                    "description": "Manage user context: save new information, request additional context, retrieve existing context, or list context files.",
+                    "name": "manage_context_files",
+                    "description": "Manage user context files with a simple file API (list, read, write, append).",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["save", "request", "retrieve", "list"],
-                                "description": "Context operation: 'save' (save new info), 'request' (ask for specific info), 'retrieve' (read context file), 'list' (list all files)"
+                                "enum": ["list", "read", "write", "append"],
+                                "description": "Context operation:\n- 'list': List all context files\n- 'read': Read a specific file\n- 'write': Overwrite a specific file\n- 'append': Append to a specific file"
                             },
-                            "summary": {
+                            "content": {
                                 "type": "string",
-                                "description": "Information to save about the user (for 'save' action)"
-                            },
-                            "query": {
-                                "type": "string",
-                                "description": "Specific question about ADDITIONAL information not in cached context (for 'request' action)"
-                            },
-                            "reasoning": {
-                                "type": "string",
-                                "description": "Why additional context is needed (for 'request' action)"
+                                "description": "Content to write or append (required for 'write' and 'append' actions)"
                             },
                             "filename": {
                                 "type": "string",
-                                "description": "Filename to retrieve (e.g., 'INDEX.md', 'profile.md', 'goals.md') - for 'retrieve' action"
+                                "description": "Filename to read/write/append (required for 'read', 'write', and 'append' actions)"
                             }
                         },
                         "required": ["action"]
@@ -171,8 +164,19 @@ class ContextManagerAgent(BaseAgent):
 
         logger.info(f"Processing message: {self.get_metadata_summary()}")
 
-        # Store user_id for tool execution
+        # Store user_id and user_name for tool execution
         self.current_user_id = user_id
+        self.current_user_name = user_context.get('user_name')  # Store user name for context
+        
+        # Prepend user's name to system prompt if available and not already added
+        if self.current_user_name and len(self.conversation_history) > 0:
+            system_prompt = self.conversation_history[0]['content']
+            user_name_prefix = f"You are assisting: {self.current_user_name}\n\n"
+            
+            # Only add if not already present
+            if not system_prompt.startswith("You are assisting:"):
+                self.conversation_history[0]['content'] = user_name_prefix + system_prompt
+                logger.info(f"Prepended user name to system prompt: {self.current_user_name}")
         
         # START AGENT CALL LOGGING
         try:
@@ -265,104 +269,84 @@ class ContextManagerAgent(BaseAgent):
     
     async def _process_with_tools_openai(self, user_id: str) -> str:
         """Process message using OpenAI tool-calling"""
-        import json
-        
-        # Generate response with tools
-        response = await self.model_client.generate_completion(
-            messages=self.conversation_history,
-            tools=self.tools_openai
-        )
-        
-        # Handle OpenAI response format
-        if hasattr(response, 'choices'):
-            # OpenAI response object
+        max_tool_rounds = 5
+        for _ in range(max_tool_rounds):
+            response = await self.model_client.generate_completion(
+                messages=self.conversation_history,
+                tools=self.tools_openai
+            )
+
+            if not hasattr(response, 'choices'):
+                return str(response)
+
             message = response.choices[0].message
-            
-            if message.tool_calls:
-                # Execute tool calls
-                tool_calls_log = []
-                tool_results_log = []
-                
-                # Track tool calls for final logging
-                for tc in message.tool_calls:
-                    tool_call_data = {
-                        'id': tc.id,
-                        'type': tc.type,
-                        'function': {
-                            'name': tc.function.name,
-                            'arguments': tc.function.arguments
-                        }
-                    }
-                    self._tool_calls_log.append(tool_call_data)
-                    tool_calls_log.append({
-                        'id': tc.id,
-                        'name': tc.function.name,
-                        'arguments': json.loads(tc.function.arguments),
-                        'timestamp': datetime.utcnow().isoformat()
-                    })
-                
-                # Add assistant message with tool calls to history
-                self.add_to_history("assistant", {
-                    "content": message.content,
-                    "tool_calls": [{
-                        "id": tc.id,
-                        "type": tc.type,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments
-                        }
-                    } for tc in message.tool_calls]
-                })
-                
-                # Execute tools and collect results
-                for tool_call in message.tool_calls:
-                    tool_name = tool_call.function.name
-                    tool_args = json.loads(tool_call.function.arguments)
-                    
-                    try:
-                        result = await self._execute_tool({"name": tool_name, "arguments": tool_args})
-                        tool_result_data = {
-                            'tool_call_id': tool_call.id,
-                            'result': result,
-                            'success': True,
-                            'timestamp': datetime.utcnow().isoformat()
-                        }
-                        tool_results_log.append(tool_result_data)
-                        self._tool_results_log.append(tool_result_data)
-                    except Exception as tool_error:
-                        error_msg = f"Error executing {tool_name}: {str(tool_error)}"
-                        tool_result_data = {
-                            'tool_call_id': tool_call.id,
-                            'result': error_msg,
-                            'success': False,
-                            'timestamp': datetime.utcnow().isoformat()
-                        }
-                        tool_results_log.append(tool_result_data)
-                        self._tool_results_log.append(tool_result_data)
-                        logger.error(error_msg)
-                    
-                    # Add tool result to history
-                    self.add_to_history("tool", result, tool_call.id)
-                
-                # Get follow-up response after tool execution
-                follow_up = await self.model_client.generate_completion(
-                    messages=self.conversation_history
-                )
-                
-                # Handle follow-up response
-                if hasattr(follow_up, 'choices'):
-                    final_response = follow_up.choices[0].message.content
-                else:
-                    final_response = follow_up
-                
-                # Note: Don't add to history here - already added with tool_calls above
-                return final_response
-            else:
-                # No tool calls, just return text
+
+            if not message.tool_calls:
                 return message.content
-        
-        # Plain text response fallback
-        return str(response)
+
+            # Track tool calls for final logging
+            for tc in message.tool_calls:
+                tool_call_data = {
+                    'id': tc.id,
+                    'type': tc.type,
+                    'function': {
+                        'name': tc.function.name,
+                        'arguments': tc.function.arguments
+                    }
+                }
+                self._tool_calls_log.append(tool_call_data)
+
+            # Add assistant message with tool calls to history
+            self.add_to_history("assistant", {
+                "content": message.content,
+                "tool_calls": [{
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                } for tc in message.tool_calls]
+            })
+
+            # Execute tools and collect results (wait for all to finish)
+            tool_results = await self._execute_tools_openai(message.tool_calls)
+            self._tool_results_log.extend(tool_results)
+
+            # Add tool results to history (must follow tool_calls)
+            for tool_call, result in zip(message.tool_calls, tool_results):
+                self.add_to_history("tool", result["result"], tool_call.id)
+
+        logger.warning("Reached max tool-call rounds without final response")
+        return "I completed the requested context operations but need further instructions to continue."
+
+    async def _execute_tools_openai(self, tool_calls) -> List[Dict[str, Any]]:
+        """Execute tool calls concurrently and return structured results"""
+        import json
+
+        async def _run_tool(tool_call):
+            tool_name = tool_call.function.name
+            tool_args = json.loads(tool_call.function.arguments)
+            try:
+                result = await self._execute_tool({"name": tool_name, "arguments": tool_args})
+                return {
+                    "tool_call_id": tool_call.id,
+                    "result": result,
+                    "success": True,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            except Exception as tool_error:
+                error_msg = f"Error executing {tool_name}: {str(tool_error)}"
+                logger.error(error_msg)
+                return {
+                    "tool_call_id": tool_call.id,
+                    "result": error_msg,
+                    "success": False,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+
+        tasks = [_run_tool(tc) for tc in tool_calls]
+        return await asyncio.gather(*tasks)
     
     async def _process_without_tools(self, user_id: str) -> str:
         """Process message without tool-calling (direct context management)"""
@@ -386,181 +370,86 @@ class ContextManagerAgent(BaseAgent):
 
         logger.info(f"Executing tool: {tool_name} (total: {tools_by_type[tool_name]})")
 
-        if tool_name == "manage_context":
+        if tool_name == "manage_context_files":
             # Override user_id with the authenticated user_id from context
             if hasattr(self, 'current_user_id'):
                 arguments['user_id'] = self.current_user_id
                 logger.debug(f"Enforcing user_id={self.current_user_id} for tool call")
+            # Also pass user_name if available
+            if hasattr(self, 'current_user_name') and self.current_user_name:
+                arguments['user_name'] = self.current_user_name
+                logger.debug(f"Including user_name={self.current_user_name} for context")
             return await self._handle_manage_context(**arguments)
         
         return f"Unknown tool: {tool_name}"
     
-    async def _manage_context_files(
-        self,
-        action: str,
-        user_id: str,
-        filename: Optional[str] = None,
-        content: Optional[str] = None,
-        append: bool = False
-    ) -> str:
-        """
-        Execute context file management operations
-        
-        Args:
-            action: Operation to perform
-            user_id: User identifier
-            filename: Name of the file (defaults to INDEX.md for create_index action)
-            content: Content to write
-            append: Whether to append to existing file
-            
-        Returns:
-            Result message
-        """
-        try:
-            ensure_user_context_dir(user_id)
-            
-            if action == "list_files":
-                files = list_user_context_files(user_id)
-                if files:
-                    return f"Context files for user {user_id}: {', '.join(files)}"
-                return f"No context files found for user {user_id}"
-            
-            elif action == "read_context":
-                if not filename:
-                    return "Error: filename is required for read_context action"
-
-                # Track file read
-                self.metadata["files_read"] += 1
-
-                file_content = read_user_context(user_id, filename)
-                if file_content:
-                    return f"Content of {filename}:\n{file_content}"
-                # Fallback: If INDEX.md is missing, search for other section files
-                if filename.upper() == "INDEX.MD":
-                    files = list_user_context_files(user_id)
-                    # Only consider .md files, skip INDEX.md
-                    section_files = [f for f in files if f.lower().endswith('.md') and f.lower() != 'index.md']
-                    if not section_files:
-                        return f"No information found about this topic. If Index.md does not exist, search in other relevant context files."
-                    aggregated = []
-                    for section_file in section_files:
-                        section_content = read_user_context(user_id, section_file)
-                        if section_content:
-                            aggregated.append(f"[{section_file}]:\n{section_content.strip()}\n")
-                    if aggregated:
-                        return "\n".join(aggregated)
-                    else:
-                        return f"No information found about this topic. If Index.md does not exist, search in other relevant context files."
-                return f"File {filename} not found for user {user_id}"
-            
-            elif action in ["create_index", "update_section"]:
-                # Auto-default filename to INDEX.md for create_index action
-                if action == "create_index" and not filename:
-                    filename = "INDEX.md"
-                    logger.info("Auto-defaulting filename to INDEX.md for create_index action")
-
-                if not filename or not content:
-                    return f"Error: filename and content are required for {action} action"
-
-                # Check if file exists to determine if this is create or update
-                from pathlib import Path
-                user_dir = Path(__file__).parent.parent / "user_context" / user_id
-                file_exists = (user_dir / filename).exists()
-
-                if append:
-                    success = update_user_context(user_id, filename, content)
-                    operation = "appended to"
-                    if success:
-                        self.metadata["files_updated"] += 1
-                else:
-                    success = write_user_context(user_id, filename, content)
-                    operation = "written to"
-                    if success:
-                        if file_exists:
-                            self.metadata["files_updated"] += 1
-                        else:
-                            self.metadata["files_created"] += 1
-
-                logger.info(
-                    f"File operations - created: {self.metadata['files_created']}, "
-                    f"updated: {self.metadata['files_updated']}, read: {self.metadata['files_read']}"
-                )
-
-                if success:
-                    return f"Successfully {operation} {filename} for user {user_id}"
-                return f"Failed to write to {filename} for user {user_id}"
-            
-            else:
-                return f"Unknown action: {action}"
-                
-        except Exception as e:
-            logger.error(f"Error managing context files: {e}")
-            return f"Error managing context files: {str(e)}"
+    
     
     async def _handle_manage_context(
         self,
         action: str,
         user_id: str,
-        summary: Optional[str] = None,
-        query: Optional[str] = None,
-        reasoning: Optional[str] = None,
+        user_name: Optional[str] = None,
+        content: Optional[str] = None,
         filename: Optional[str] = None
     ) -> str:
         """
-        Route manage_context actions to appropriate handlers
+        Route manage_context_files actions to appropriate handlers
         
         Args:
-            action: Context operation (save, request, retrieve, list)
+            action: Context operation (list, read, write, append)
             user_id: User identifier
-            summary: Information to save (for 'save' action)
-            query: Question for additional context (for 'request' action)
-            reasoning: Why additional context needed (for 'request' action)
-            filename: File to retrieve (for 'retrieve' action)
+            user_name: User's name (optional, for context)
+            content: Content to write (for 'write' or 'append')
+            filename: File to read/write/append
             
         Returns:
             Result message
         """
-        logger.info(f"Handle manage_context action: {action}")
+        logger.info(f"Handle manage_context_files action: {action}")
         
-        if action == "save":
-            # Save new user information to context file
-            if not summary:
-                return "Error: summary is required for 'save' action"
-            
-            content = f"# User Information\n\n{summary}\n\nUpdated: {datetime.now(timezone.utc).isoformat()}"
-            return await self._manage_context_files(
-                action="update_section",
-                user_id=user_id,
-                filename="user_info.md",
-                content=content,
-                append=True
-            )
-        
-        elif action == "request":
-            # Request additional context information
-            if not query:
-                return "Error: query is required for 'request' action"
-            
-            # Return a placeholder indicating that additional context should be requested
-            return f"Requesting additional context: {query}" + (f"\nReasoning: {reasoning}" if reasoning else "")
-        
-        elif action == "retrieve":
-            # Retrieve existing context file
+        if action == "list":
+            ensure_user_context_dir(user_id)
+            files = list_user_context_files(user_id)
+            return f"Context files for user {user_id}: {', '.join(files)}" if files else f"No context files found for user {user_id}"
+
+        if action == "read":
             if not filename:
-                filename = "INDEX.md"
-            
-            return await self._manage_context_files(
-                action="read_context",
-                user_id=user_id,
-                filename=filename
-            )
-        
-        elif action == "list":
-            # List all context files
-            return await self._manage_context_files(
-                action="list_files",
-                user_id=user_id
-            )
+                return "Error: filename is required for 'read' action"
+            self.metadata["files_read"] += 1
+            file_content = read_user_context(user_id, filename)
+            if file_content is None:
+                return f"File {filename} not found for user {user_id}"
+            return f"Content of {filename}:\n{file_content}"
+
+        if action == "write":
+            if not filename:
+                return "Error: filename is required for 'write' action"
+            if content is None:
+                return "Error: content is required for 'write' action"
+            ensure_user_context_dir(user_id)
+            from pathlib import Path
+            user_dir = Path(__file__).parent.parent / "agent_context" / user_id
+            file_exists = (user_dir / filename).exists()
+            success = write_user_context(user_id, filename, content)
+            if success:
+                if file_exists:
+                    self.metadata["files_updated"] += 1
+                else:
+                    self.metadata["files_created"] += 1
+                return f"Successfully written to {filename} for user {user_id}"
+            return f"Failed to write to {filename} for user {user_id}"
+
+        if action == "append":
+            if not filename:
+                return "Error: filename is required for 'append' action"
+            if content is None:
+                return "Error: content is required for 'append' action"
+            success = update_user_context(user_id, filename, content)
+            if success:
+                self.metadata["files_updated"] += 1
+                return f"Successfully appended to {filename} for user {user_id}"
+            return f"Failed to append to {filename} for user {user_id}"
         
         else:
             return f"Unknown action: {action}"
