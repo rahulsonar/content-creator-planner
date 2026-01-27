@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { getStoredUser } from '@/lib/auth/client';
 
 interface Message {
   id: number;
@@ -12,22 +13,28 @@ interface Message {
   timestamp: Date;
 }
 
-const DEFAULT_MESSAGE: Message = {
-  id: 1,
-  role: 'assistant',
-  content: 'Hello! I\'m your AI content strategy assistant. I can help you plan your content calendar, suggest video ideas, analyze trends, and optimize your posting schedule. How can I help you today?',
-  timestamp: new Date(),
-};
-
 function ChatContent() {
   const router = useRouter();
-  const [messages, setMessages] = useState<Message[]>([DEFAULT_MESSAGE]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
+    
+    // Get user's name and personalize the greeting
+    const user = getStoredUser();
+    const userName = user?.name || user?.email?.split('@')[0] || 'there';
+    
+    const defaultMessage: Message = {
+      id: 1,
+      role: 'assistant',
+      content: `Hello ${userName}! I'm your AI content strategy assistant. I can help you plan your content calendar, suggest video ideas, analyze trends, and optimize your posting schedule. How can I help you today?`,
+      timestamp: new Date(),
+    };
+    
+    setMessages([defaultMessage]);
   }, []);
 
   const handleSend = async () => {

@@ -106,6 +106,7 @@ class AnthropicClient:
             if tool.get("type") == "function":
                 func = tool["function"]
                 anthropic_tools.append({
+                    "type": "custom",
                     "name": func["name"],
                     "description": func.get("description", ""),
                     "input_schema": func.get("parameters", {})

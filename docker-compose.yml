@@ -9,6 +9,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: content_planner
+      TZ: Asia/Kolkata
+      PGTZ: Asia/Kolkata
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -23,6 +25,8 @@ services:
     image: redis:7-alpine
     container_name: content-planner-redis
     restart: unless-stopped
+    environment:
+      TZ: Asia/Kolkata
     ports:
       - "6379:6379"
     volumes:
@@ -45,6 +49,7 @@ services:
       - "3000:3000"
       - "5555:5555"
     environment:
+      - TZ=Asia/Kolkata
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_planner
       - NODE_ENV=development
       - WATCHPACK_POLLING=true
@@ -57,6 +62,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
   python-agents:
     build:
@@ -67,6 +74,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - TZ=Asia/Kolkata
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_planner
       - REDIS_URL=redis://redis:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}

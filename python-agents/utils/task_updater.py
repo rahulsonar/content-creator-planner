@@ -9,8 +9,9 @@ from utils.logger import logger
 
 
 async def update_task_by_id(
-    task_id: str,
+    task_id: int,
     updates: Dict[str, Any],
+    user_id: str = None,
     db_url: str = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
 ) -> bool:
     """
@@ -19,6 +20,7 @@ async def update_task_by_id(
     Args:
         task_id: ID of the task to update
         updates: Dictionary of fields to update
+        user_id: User ID to verify ownership (optional, recommended for security)
         db_url: PostgreSQL connection string
         
     Returns:
@@ -33,12 +35,16 @@ async def update_task_by_id(
             "actualHours": 2,
             "description": "Updated description"
         }
-        success = await update_task_by_id(task_id, updates)
+        success = await update_task_by_id(task_id, updates, user_id="user123")
     """
     conn = None
     try:
         # Connect to database
         conn = await asyncpg.connect(db_url)
+
+        if "labels" in updates and "tags" not in updates:
+            updates["tags"] = updates.get("labels")
+            updates.pop("labels", None)
         
         # Build dynamic UPDATE query
         set_clauses = []
@@ -53,6 +59,7 @@ async def update_task_by_id(
             "priority": "priority",
             "estimatedHours": "\"estimatedHours\"",
             "actualHours": "\"actualHours\"",
+            "projectId": "\"projectId\"",
             "startDate": "\"startDate\"",
             "endDate": "\"endDate\"",
             "dueDate": "\"dueDate\"",
@@ -103,10 +110,18 @@ async def update_task_by_id(
         # Add updated timestamp
         set_clauses.append(f"\"updatedAt\" = NOW()")
         
+        # Build WHERE clause with optional user_id filter
+        where_clauses = ["id = $1"]
+        if user_id:
+            where_clauses.append(f'"userId" = ${param_index}')
+            values.append(user_id)
+        
+        where_sql = " AND ".join(where_clauses)
+        
         query = f"""
             UPDATE "Task"
             SET {', '.join(set_clauses)}
-            WHERE id = $1
+            WHERE {where_sql}
             RETURNING id
         """
         
@@ -129,6 +144,7 @@ async def update_task_by_id(
 
 async def update_tasks_batch(
     task_updates: List[Dict[str, Any]],
+    user_id: str = None,
     db_url: str = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
 ) -> Dict[str, Any]:
     """
@@ -136,6 +152,7 @@ async def update_tasks_batch(
     
     Args:
         task_updates: List of update objects with "id" and fields to update
+        user_id: User ID to verify ownership (optional, recommended for security)
         db_url: PostgreSQL connection string
         
     Returns:
@@ -154,7 +171,7 @@ async def update_tasks_batch(
                 "priority": "HIGH"
             }
         ]
-        result = await update_tasks_batch(task_updates)
+        result = await update_tasks_batch(task_updates, user_id="user123")
     """
     if not task_updates:
         logger.warning("No tasks to update in batch")
@@ -184,7 +201,7 @@ async def update_tasks_batch(
         updates = {k: v for k, v in task_update.items() if k != "id"}
         
         try:
-            result = await update_task_by_id(task_id, updates, db_url)
+            result = await update_task_by_id(task_id, updates, user_id, db_url)
             if result:
                 success_count += 1
                 details.append({

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import LogoutButton from "@/app/components/LogoutButton";
+import UserProfile from "@/app/components/UserProfile";
 
 export default function AppLayout({
   children,
@@ -14,6 +15,9 @@ export default function AppLayout({
             <div className="flex space-x-8">
               <Link href="/" className="hover:bg-gray-700 px-3 py-2 rounded-md text-sm font-medium transition-colors">
                 Home
+              </Link>
+              <Link href="/projects" className="hover:bg-gray-700 px-3 py-2 rounded-md text-sm font-medium transition-colors">
+                Projects
               </Link>
               <Link href="/kanban" className="hover:bg-gray-700 px-3 py-2 rounded-md text-sm font-medium transition-colors">
                 Board
@@ -31,7 +35,8 @@ export default function AppLayout({
                 Agent Logs
               </Link>
             </div>
-            <div>
+            <div className="flex items-center gap-4">
+              <UserProfile />
               <LogoutButton />
             </div>
           </div>

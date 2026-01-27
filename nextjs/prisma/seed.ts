@@ -8,6 +8,11 @@ async function main() {
   // Clear existing data
   await prisma.task.deleteMany({});
   await prisma.user.deleteMany({});
+  
+  // Reset auto-increment counters
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "Task" RESTART IDENTITY CASCADE;');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "User" RESTART IDENTITY CASCADE;');
+  
   console.log('✨ Cleared existing data');
 
   // Create default user with hashed password
@@ -216,10 +221,22 @@ async function main() {
     },
   ];
 
-  // Create tasks
-  for (const task of tasks) {
-    await prisma.task.create({
-      data: task,
+  // Create tasks with task keys
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    
+    const createdTask = await prisma.task.create({
+      data: {
+        ...task,
+        taskKey: 'TEMP',
+        userId: defaultUser.id,
+      },
+    });
+    
+    // Update with correct taskKey based on actual ID
+    await prisma.task.update({
+      where: { id: createdTask.id },
+      data: { taskKey: `CCP-${String(createdTask.id).padStart(3, '0')}` },
     });
   }
 
@@ -228,6 +245,7 @@ async function main() {
   // Create example with subtasks
   const mainTask = await prisma.task.create({
     data: {
+      taskKey: 'TEMP',
       title: 'Complete "Ultimate Productivity Setup" Video Project',
       description: 'End-to-end production of comprehensive productivity video',
       status: TaskStatus.IN_PROGRESS,
@@ -237,7 +255,14 @@ async function main() {
       tags: ['video-project', 'productivity', 'tutorial'],
       estimatedHours: 30,
       actualHours: 12,
+      userId: defaultUser.id,
     },
+  });
+  
+  // Update with correct taskKey based on actual ID
+  await prisma.task.update({
+    where: { id: mainTask.id },
+    data: { taskKey: `CCP-${String(mainTask.id).padStart(3, '0')}` },
   });
 
   const subtasks = [
@@ -292,9 +317,21 @@ async function main() {
     },
   ];
 
-  for (const subtask of subtasks) {
-    await prisma.task.create({
-      data: subtask,
+  for (let i = 0; i < subtasks.length; i++) {
+    const subtask = subtasks[i];
+    
+    const createdSubtask = await prisma.task.create({
+      data: {
+        ...subtask,
+        userId: defaultUser.id,
+        taskKey: 'TEMP',
+      },
+    });
+    
+    // Update with correct taskKey based on actual ID
+    await prisma.task.update({
+      where: { id: createdSubtask.id },
+      data: { taskKey: `CCP-${String(createdSubtask.id).padStart(3, '0')}` },
     });
   }
 

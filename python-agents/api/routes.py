@@ -179,7 +179,8 @@ async def process_chat_background(
     message: str,
     context: dict,
     message_id: str,
-    conversation_messages: list
+    conversation_messages: list,
+    user_name: str | None = None
 ):
     """
     Background task to process chat message with agent
@@ -191,6 +192,7 @@ async def process_chat_background(
         context: User context
         message_id: Unique message ID for tracking
         conversation_messages: Full conversation history
+        user_name: Optional user name for personalization
     """
     try:
         logger.info(f"[Background] Processing message for conversation {conversation_id}")
@@ -246,6 +248,10 @@ async def process_chat_background(
                 redis_client=redis_client
             )
             
+            # Set user information for personalization
+            if user_name:
+                agent._current_user_name = user_name
+            
             # Load conversation history into agent
             if conversation_messages:
                 agent.load_conversation_history(conversation_messages)
@@ -253,6 +259,7 @@ async def process_chat_background(
             # Load user context from storage and add tracking IDs
             user_context = context or {}
             user_context["user_id"] = user_id
+            user_context["user_name"] = user_name
             user_context["conversation_id"] = conversation_id
             user_context["message_id"] = message_id
             
@@ -291,20 +298,22 @@ async def process_chat_background(
 async def planning_chat(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
-    user_id: str = Depends(verify_internal_request)
+    user_info: tuple[str, str | None] = Depends(verify_internal_request)
 ):
     """
     Planning agent chat endpoint for content strategy conversations
     
     Args:
         request: Chat message with conversation history
-        user_id: Authenticated user ID
+        user_info: Tuple of (user_id, user_name) from authentication
         
     Returns:
         Agent response
     """
     try:
-        logger.info(f"Processing planning chat for user: {user_id}")
+        # Unpack user_id and user_name from the tuple
+        user_id, user_name = user_info
+        logger.info(f"Processing planning chat for user: {user_id} ({user_name})")
         
         # Check if dummy AI mode is enabled
         if settings.USE_DUMMY_AI:
@@ -351,7 +360,8 @@ async def planning_chat(
             message=request.message,
             context=request.context,
             message_id=message_id,
-            conversation_messages=conversation_messages
+            conversation_messages=conversation_messages,
+            user_name=user_name
         )
         
         # Return immediately with 202 Accepted

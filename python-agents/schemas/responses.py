@@ -66,3 +66,29 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
+
+
+class TaskManagerResponse(BaseModel):
+    """Task Manager agent response with structured result"""
+    status: str  # "success", "error", "partial"
+    action: Optional[str] = None  # "create", "search", "update", "get_one", "add_notes"
+    message: str  # Human-readable summary
+    data: Optional[Dict[str, Any]] = None  # Structured result data (tasks, counts, IDs, etc.)
+    error: Optional[str] = None  # Error message if status is "error"
+    metadata: Optional[Dict[str, Any]] = None  # Operation metadata (count, duration, etc.)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "success",
+                "action": "create",
+                "message": "Created 5 tasks successfully",
+                "data": {
+                    "created_count": 5,
+                    "task_ids": ["id1", "id2", "id3", "id4", "id5"]
+                },
+                "metadata": {
+                    "operation_time_ms": 250
+                }
+            }
+        }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyToken } from '@/lib/auth/helpers';
+import { prisma } from '@/lib/prisma';
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://python-agents:8000';
 
@@ -17,17 +18,38 @@ export async function POST(request: NextRequest) {
     // Extract user info from token for internal API call
     const token = request.cookies.get('auth-token')?.value;
     let userId = 'anonymous';
+    let userName = null;
     
     if (token) {
       const decoded = verifyToken(token);
       if (decoded) {
         userId = decoded.userId;
-        console.log('Authenticated userId:', userId);
+        userName = decoded.name;
+        console.log('Authenticated userId:', userId, 'userName:', userName);
       } else {
         console.error('Token verification failed: invalid token');
       }
     } else {
       console.warn('No token found in cookies');
+    }
+
+    // If this is the first conversation (no conversationId) and we have a userId,
+    // fetch the latest user name from the database to ensure context manager has accurate info
+    if (!conversationId && userId !== 'anonymous') {
+      try {
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { name: true }
+        });
+        
+        if (user?.name) {
+          userName = user.name;
+          console.log('Fetched user name from DB for first conversation:', userName);
+        }
+      } catch (dbError) {
+        console.error('Failed to fetch user name from DB:', dbError);
+        // Continue with userName from token if DB fetch fails
+      }
     }
 
     // Call Python Planning Agent API
@@ -36,12 +58,13 @@ export async function POST(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         'X-User-ID': userId,
+        'X-User-Name': userName || '',
         'X-Internal-Secret': process.env.INTERNAL_API_SECRET || 'dev-secret-change-in-production',
       },
       body: JSON.stringify({
         message: message,
         conversationId: conversationId,
-        context: null, // TODO: Pass user context from profile
+        context: userName ? { user_name: userName } : null,
       }),
     });
 

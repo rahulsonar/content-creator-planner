@@ -56,11 +56,37 @@ export function useWebSocket({
 
     isConnectingRef.current = true;
 
-    const token = getStoredToken();
+    let token = getStoredToken();
+    
+    // If no token in localStorage, try to get it from cookie via API
     if (!token) {
-      console.error('[WS Hook] No auth token available');
-      onError?.('Not authenticated');
-      isConnectingRef.current = false;
+      console.warn('[WS Hook] No token in localStorage, attempting to retrieve from cookie');
+      
+      // Check if we can get token via auth/me endpoint
+      fetch('/api/auth/me')
+        .then(res => res.json())
+        .then(data => {
+          if (data.token) {
+            localStorage.setItem('auth-token', data.token);
+            if (data.user) {
+              localStorage.setItem('user', JSON.stringify(data.user));
+            }
+            // Retry connection now that we have the token
+            console.log('[WS Hook] Retrieved token from cookie, retrying connection');
+            isConnectingRef.current = false;
+            connect();
+          } else {
+            console.error('[WS Hook] No auth token available - please log in again');
+            onError?.('Please log in again to use chat');
+            isConnectingRef.current = false;
+          }
+        })
+        .catch(err => {
+          console.error('[WS Hook] Failed to retrieve token:', err);
+          onError?.('Authentication error - please refresh the page or log in again');
+          isConnectingRef.current = false;
+        });
+      
       return;
     }
 
