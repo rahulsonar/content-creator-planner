@@ -233,11 +233,11 @@ async def process_chat_background(
         
         # Get database session
         async with db_manager.get_session() as db_session:
-            context_manager = ContextManagerAgent(context_client, db_session=db_session)
-            task_manager = UserTaskManagerAgent(task_client)
-            
             # Get Redis client
             redis_client = await get_redis_client(settings)
+            
+            context_manager = ContextManagerAgent(context_client, db_session=db_session)
+            task_manager = UserTaskManagerAgent(task_client, redis_client=redis_client)
         
             agent = PlanningAgent(
                 client, 

@@ -88,14 +88,14 @@ async def insert_tasks_to_db(
                     "dependencies": task.get("dependencies", [])
                 }
                 
-                # Insert task
+                # Insert task (id auto-increments, don't specify it)
                 query = """
                     INSERT INTO "Task" (
-                        id, "taskKey", title, description, status, priority,
+                        "taskKey", title, description, status, priority,
                         "userId", "projectId", "estimatedHours", "aiGenerated", "aiContext", "tags",
                         "createdAt", "updatedAt"
                     ) VALUES (
-                        gen_random_uuid()::text, $1, $2, $3, 'TODO', $4::\"Priority\",
+                        $1, $2, $3, 'TODO', $4::"Priority",
                         $5, $6, $7, true, $8, $9,
                         NOW(), NOW()
                     )

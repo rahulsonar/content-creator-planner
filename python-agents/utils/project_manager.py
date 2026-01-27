@@ -4,6 +4,7 @@ Simple function to insert projects into PostgreSQL database
 """
 import asyncpg
 from typing import List, Dict, Any
+from datetime import datetime, date
 from utils.logger import logger
 
 
@@ -60,9 +61,32 @@ async def insert_projects_to_db(
                 color = project.get("color")
                 icon = project.get("icon")
                 tags = project.get("tags", [])
+                
+                # Convert string dates to date objects
                 start_date = project.get("startDate")
+                if start_date and isinstance(start_date, str):
+                    try:
+                        start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
+                    except (ValueError, AttributeError):
+                        logger.warning(f"Invalid startDate format: {start_date}, setting to None")
+                        start_date = None
+                
                 end_date = project.get("endDate")
+                if end_date and isinstance(end_date, str):
+                    try:
+                        end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date()
+                    except (ValueError, AttributeError):
+                        logger.warning(f"Invalid endDate format: {end_date}, setting to None")
+                        end_date = None
+                
                 due_date = project.get("dueDate")
+                if due_date and isinstance(due_date, str):
+                    try:
+                        due_date = datetime.fromisoformat(due_date.replace('Z', '+00:00')).date()
+                    except (ValueError, AttributeError):
+                        logger.warning(f"Invalid dueDate format: {due_date}, setting to None")
+                        due_date = None
+                
                 is_default = bool(project.get("isDefault", False))
 
                 if is_default:

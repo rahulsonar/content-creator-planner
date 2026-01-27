@@ -20,20 +20,23 @@ from storage.agent_call_log import agent_call_logger
 class UserTaskManagerAgent(BaseAgent):
     """Agent for managing user's tasks with unified action-based tool"""
     
-    def __init__(self, model_client):
+    def __init__(self, model_client, redis_client=None):
         """
         Initialize user task manager agent
         
         Args:
             model_client: LLM client (OpenAI)
+            redis_client: Redis client for temporary storage of intermediate data
         """
         super().__init__(model_client, "task_manager")
+        self.redis_client = redis_client
         self._current_user_id = None
         self._current_conversation_id = None
         self._current_message_id = None
         self._current_log_id = None  # Track current agent call log
         self._tool_calls_log = []  # Track tool calls for logging
         self._tool_results_log = []  # Track tool results for logging
+        self._tool_calls_detailed = []  # Track detailed tool execution info
 
         # Initialize metadata
         self.metadata = {
@@ -433,6 +436,36 @@ class UserTaskManagerAgent(BaseAgent):
                         "required": ["action"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "redis_storage",
+                    "description": "Store and retrieve temporary data using Redis key-value storage. Use this to save intermediate task information, task lists, draft plans, or any other data you need to track during task management operations. Data can have optional TTL (time-to-live) for automatic expiration.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {
+                                "type": "string",
+                                "enum": ["set", "get", "delete", "exists"],
+                                "description": "Storage operation: 'set' (save data), 'get' (retrieve data), 'delete' (remove data), 'exists' (check if key exists)"
+                            },
+                            "key": {
+                                "type": "string",
+                                "description": "Storage key name. Use descriptive keys like 'task_manager:task_list', 'task_manager:batch_updates', etc. Will be automatically prefixed with user_id."
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "Value to store (for 'set' operation). Can be any JSON-serializable data - string, number, object, or array."
+                            },
+                            "ttl": {
+                                "type": "integer",
+                                "description": "Time-to-live in seconds (for 'set' operation). Default: 3600 (1 hour). Data will automatically expire after this period."
+                            }
+                        },
+                        "required": ["operation", "key"]
+                    }
+                }
             }
         ]
 
@@ -564,6 +597,7 @@ class UserTaskManagerAgent(BaseAgent):
         # Reset tool tracking for this message
         self._tool_calls_log = []
         self._tool_results_log = []
+        self._tool_calls_detailed = []
         
         # START AGENT CALL LOGGING
         try:
@@ -697,6 +731,7 @@ class UserTaskManagerAgent(BaseAgent):
                             output_message=final_response,
                             tool_calls=self._tool_calls_log if self._tool_calls_log else None,
                             tool_results=self._tool_results_log if self._tool_results_log else None,
+                            tool_calls_detailed=self._tool_calls_detailed if self._tool_calls_detailed else None,
                             metadata={
                                 "iterations": iteration,
                                 "final_history_length": len(self.conversation_history),
@@ -723,6 +758,7 @@ class UserTaskManagerAgent(BaseAgent):
                     output_message=final_msg,
                     tool_calls=self._tool_calls_log if self._tool_calls_log else None,
                     tool_results=self._tool_results_log if self._tool_results_log else None,
+                    tool_calls_detailed=self._tool_calls_detailed if self._tool_calls_detailed else None,
                     metadata={
                         "iterations": max_iterations,
                         "max_iterations_reached": True,
@@ -763,6 +799,7 @@ class UserTaskManagerAgent(BaseAgent):
 
     async def _execute_tools_openai(self, tool_calls) -> List[Dict[str, Any]]:
         """Execute OpenAI tool calls"""
+        import traceback
         results = []
         
         # Log tool calls
@@ -783,20 +820,45 @@ class UserTaskManagerAgent(BaseAgent):
             tool_name = tool_call.function.name
             tool_args = json.loads(tool_call.function.arguments)
             
+            # Track detailed execution
+            detailed_call = {
+                "tool_call_id": tool_call.id,
+                "name": tool_name,
+                "input": tool_args,
+                "output": None,
+                "exception": None,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "duration_ms": None,
+                "success": False
+            }
+            
             logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
             self.metadata["tool_calls_count"] += 1
             
+            start_time = datetime.now(timezone.utc)
             try:
                 if tool_name == "manage_tasks":
                     result = await self._handle_manage_tasks(tool_args)
                 elif tool_name == "manage_projects":
                     result = await self._handle_manage_projects(tool_args)
+                elif tool_name == "redis_storage":
+                    result = await self._execute_redis_storage(tool_args, self._current_user_id or "unknown")
                 else:
                     result = {"status": "error", "message": f"Unknown tool: {tool_name}", "error": f"Unknown tool: {tool_name}"}
                 
+                end_time = datetime.now(timezone.utc)
                 logger.info(f"Tool {tool_name} completed successfully")
+                
                 # Convert dict result to JSON string for agent history
                 result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+                
+                # Update detailed tracking
+                detailed_call["output"] = result
+                detailed_call["completed_at"] = end_time.isoformat()
+                detailed_call["duration_ms"] = int((end_time - start_time).total_seconds() * 1000)
+                detailed_call["success"] = True
+                
                 results.append({
                     "tool_call_id": tool_call.id,
                     "result": result_str,
@@ -804,8 +866,17 @@ class UserTaskManagerAgent(BaseAgent):
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             except Exception as e:
+                end_time = datetime.now(timezone.utc)
                 logger.error(f"Tool execution failed: {tool_name} - {e}", exc_info=True)
                 error_result = {"status": "error", "message": f"Error executing tool", "error": str(e)}
+                
+                # Update detailed tracking with exception
+                detailed_call["output"] = error_result
+                detailed_call["exception"] = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                detailed_call["completed_at"] = end_time.isoformat()
+                detailed_call["duration_ms"] = int((end_time - start_time).total_seconds() * 1000)
+                detailed_call["success"] = False
+                
                 results.append({
                     "tool_call_id": tool_call.id,
                     "result": json.dumps(error_result),
@@ -813,11 +884,19 @@ class UserTaskManagerAgent(BaseAgent):
                     "error": str(e),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
+            
+            # Add to detailed tracking
+            self._tool_calls_detailed.append(detailed_call)
         
         # Log tool results
         try:
             await agent_call_logger.update_tool_results(self._current_log_id, results)
-            logger.info(f"Logged {len(results)} tool results")
+            # Also update detailed tool calls
+            if self._tool_calls_detailed:
+                await agent_call_logger.update_tool_calls_detailed(self._current_log_id, self._tool_calls_detailed)
+                logger.info(f"Logged {len(results)} tool results and {len(self._tool_calls_detailed)} detailed records")
+            else:
+                logger.info(f"Logged {len(results)} tool results")
         except Exception as e:
             logger.error(f"Failed to log tool results: {e}")
         
@@ -1593,3 +1672,79 @@ class UserTaskManagerAgent(BaseAgent):
                 "message": "Error listing projects",
                 "error": str(e)
             }
+
+    async def _execute_redis_storage(self, tool_input: Dict[str, Any], user_id: str) -> str:
+        """
+        Handler for redis_storage tool. Stores and retrieves data from Redis.
+        
+        Args:
+            tool_input: Dict with 'operation', 'key', optional 'value' and 'ttl'
+            user_id: User identifier for key namespacing
+            
+        Returns:
+            Result message or retrieved data
+        """
+        try:
+            if not self.redis_client:
+                return "Error: Redis client not available. Please configure Redis connection."
+            
+            operation = tool_input.get("operation")
+            key = tool_input.get("key", "").strip()
+            
+            if not key:
+                return "Error: 'key' parameter is required."
+            
+            # Namespace the key with user_id to prevent conflicts
+            namespaced_key = f"task_manager:{user_id}:{key}"
+            
+            if operation == "set":
+                value = tool_input.get("value")
+                if value is None:
+                    return "Error: 'value' parameter is required for 'set' operation."
+                
+                ttl = tool_input.get("ttl", 3600)  # Default 1 hour
+                
+                # Store the value
+                success = await self.redis_client.set(namespaced_key, value, ttl=ttl)
+                
+                if success:
+                    logger.info(f"Stored data in Redis: {namespaced_key} (TTL: {ttl}s)")
+                    return f"Successfully stored data with key '{key}' (expires in {ttl} seconds)."
+                else:
+                    return f"Failed to store data with key '{key}'."
+            
+            elif operation == "get":
+                # Retrieve the value
+                value = await self.redis_client.get(namespaced_key)
+                
+                if value is not None:
+                    logger.info(f"Retrieved data from Redis: {namespaced_key}")
+                    # Return the value as a string (will be JSON if object/array was stored)
+                    return f"Retrieved data for key '{key}': {json.dumps(value) if not isinstance(value, str) else value}"
+                else:
+                    return f"No data found for key '{key}'. It may have expired or never been set."
+            
+            elif operation == "delete":
+                # Delete the key
+                success = await self.redis_client.delete(namespaced_key)
+                
+                if success:
+                    logger.info(f"Deleted data from Redis: {namespaced_key}")
+                    return f"Successfully deleted data with key '{key}'."
+                else:
+                    return f"Failed to delete key '{key}' or key does not exist."
+            
+            elif operation == "exists":
+                # Check if key exists
+                exists = await self.redis_client.exists(namespaced_key)
+                
+                logger.info(f"Checked existence in Redis: {namespaced_key} = {exists}")
+                return f"Key '{key}' {'exists' if exists else 'does not exist'}."
+            
+            else:
+                return f"Error: Invalid operation '{operation}'. Use 'set', 'get', 'delete', or 'exists'."
+        
+        except Exception as e:
+            logger.error(f"Error in redis_storage tool: {e}")
+            logger.error(traceback.format_exc())
+            return f"Error with Redis storage: {str(e)}"

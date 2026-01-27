@@ -138,6 +138,7 @@ class AgentCallLogger:
         output_message: Optional[str] = None,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
         tool_results: Optional[List[Dict[str, Any]]] = None,
+        tool_calls_detailed: Optional[List[Dict[str, Any]]] = None,
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
@@ -151,6 +152,7 @@ class AgentCallLogger:
             output_message: Agent's response/output
             tool_calls: List of tool calls made
             tool_results: Results from tool calls
+            tool_calls_detailed: Detailed tool execution info (input, output, exception, duration)
             prompt_tokens: Token count for prompt
             completion_tokens: Token count for completion
             total_tokens: Total tokens used
@@ -170,6 +172,7 @@ class AgentCallLogger:
                         "outputMessage" = :outputMessage,
                         "toolCalls" = CAST(:toolCalls AS jsonb),
                         "toolResults" = CAST(:toolResults AS jsonb),
+                        "toolCallsDetailed" = CAST(:toolCallsDetailed AS jsonb),
                         "promptTokens" = :promptTokens,
                         "completionTokens" = :completionTokens,
                         "totalTokens" = :totalTokens,
@@ -186,6 +189,7 @@ class AgentCallLogger:
                         "outputMessage": output_message,
                         "toolCalls": json.dumps(tool_calls) if tool_calls else None,
                         "toolResults": json.dumps(tool_results) if tool_results else None,
+                        "toolCallsDetailed": json.dumps(tool_calls_detailed) if tool_calls_detailed else None,
                         "promptTokens": prompt_tokens,
                         "completionTokens": completion_tokens,
                         "totalTokens": total_tokens,
@@ -323,6 +327,49 @@ class AgentCallLogger:
             
         except Exception as e:
             logger.error(f"Failed to update tool results for {log_id}: {str(e)}")
+    
+    async def update_tool_calls_detailed(
+        self,
+        log_id: str,
+        tool_calls_detailed: List[Dict[str, Any]]
+    ):
+        """
+        Update detailed tool call information including input, output, exceptions
+        
+        Args:
+            log_id: Agent call log ID
+            tool_calls_detailed: List of detailed tool call records with:
+                - tool_call_id: Unique identifier for the tool call
+                - name: Tool name
+                - input: Tool input arguments (JSON)
+                - output: Tool execution result
+                - exception: Exception message if tool failed
+                - started_at: ISO timestamp when tool execution started
+                - completed_at: ISO timestamp when tool execution completed
+                - duration_ms: Execution duration in milliseconds
+                - success: Boolean indicating if tool succeeded
+        """
+        try:
+            async with self.db.get_session() as session:
+                query = text("""
+                    UPDATE "AgentCallLog"
+                    SET "toolCallsDetailed" = CAST(:toolCallsDetailed AS jsonb), "updatedAt" = :updatedAt
+                    WHERE id = :log_id
+                """)
+                
+                await session.execute(
+                    query,
+                    {
+                        "toolCallsDetailed": json.dumps(tool_calls_detailed),
+                        "updatedAt": datetime.now(timezone.utc).replace(tzinfo=None),
+                        "log_id": log_id
+                    }
+                )
+                await session.commit()
+                logger.debug(f"Updated detailed tool calls for {log_id}: {len(tool_calls_detailed)} records")
+            
+        except Exception as e:
+            logger.error(f"Failed to update detailed tool calls for {log_id}: {str(e)}")
     
     async def get_logs_by_message(
         self,
