@@ -153,7 +153,7 @@ class PlanningAgent(BaseAgent):
             {
                 "type": "function",
                 "function": {
-                    "name": "break_into_subtasks",
+                    "name": "delegate_to_agents",
                     "description": "Break a complex task into smaller independent subtasks and delegate to child executor agents for parallel processing. Each subtask will be executed by an independent executor agent instance. Use this for complex tasks that can be parallelized.",
                     "parameters": {
                         "type": "object",
@@ -290,6 +290,7 @@ class PlanningAgent(BaseAgent):
         # Reset tool tracking for this message
         self._tool_calls_log = []
         self._tool_results_log = []
+        self._tool_calls_detailed = []  # New: detailed tool execution tracking
         
         # START AGENT CALL LOGGING
         try:
@@ -451,21 +452,90 @@ class PlanningAgent(BaseAgent):
                         tools = [tool for tool in self.tools_openai 
                                 if tool["function"]["name"] != "request_user_context"]
                     
-                    follow_up_response = await self.model_client.generate_completion(
-                        messages=self.conversation_history,
-                        tools=tools,
-                    )
+                    # Loop to handle potential multi-turn tool calling
+                    max_tool_iterations = 5  # Prevent infinite loops
+                    iteration_count = 0
                     
-                    # Extract text content from response (handle both string and ChatCompletion object)
-                    if isinstance(follow_up_response, str):
-                        follow_up_text = follow_up_response
-                    else:
-                        # ChatCompletion object - extract content
-                        follow_up_text = follow_up_response.choices[0].message.content
+                    while iteration_count < max_tool_iterations:
+                        iteration_count += 1
+                        logger.info(f"[PLANNER] Follow-up completion iteration {iteration_count}/{max_tool_iterations}")
+                        
+                        follow_up_response = await self.model_client.generate_completion(
+                            messages=self.conversation_history,
+                            tools=tools,
+                        )
+                        
+                        # Check if response has tool calls (handle both string and ChatCompletion object)
+                        if isinstance(follow_up_response, str):
+                            # String response = no more tool calls
+                            follow_up_text = follow_up_response
+                            break
+                        else:
+                            # ChatCompletion object - check for tool calls
+                            follow_up_message = follow_up_response.choices[0].message
+                            
+                            # If the LLM wants to make more tool calls, execute them
+                            if hasattr(follow_up_message, 'tool_calls') and follow_up_message.tool_calls:
+                                logger.warning(f"[PLANNER] Follow-up response contains {len(follow_up_message.tool_calls)} additional tool call(s): {[tc.function.name for tc in follow_up_message.tool_calls]}")
+                                logger.warning(f"[PLANNER] This indicates a potential issue - follow-up should provide final text, not request more tools")
+                                
+                                # Track these tool calls
+                                for tc in follow_up_message.tool_calls:
+                                    self._tool_calls_log.append({
+                                        "id": tc.id,
+                                        "type": tc.type,
+                                        "function": {
+                                            "name": tc.function.name,
+                                            "arguments": tc.function.arguments
+                                        }
+                                    })
+                                
+                                # Add assistant message with tool calls to history
+                                self.add_to_history("assistant", {
+                                    "content": follow_up_message.content,
+                                    "tool_calls": [{
+                                        "id": tc.id,
+                                        "type": tc.type,
+                                        "function": {
+                                            "name": tc.function.name,
+                                            "arguments": tc.function.arguments
+                                        }
+                                    } for tc in follow_up_message.tool_calls]
+                                })
+                                
+                                # Execute these additional tools
+                                logger.info(f"[PLANNER] Executing {len(follow_up_message.tool_calls)} additional tool(s) from follow-up response...")
+                                additional_results = await self._execute_tools_openai(follow_up_message.tool_calls)
+                                logger.info(f"[PLANNER] Additional tools completed: {[r[:100] for r in additional_results]}")
+                                
+                                # Track results
+                                self._tool_results_log.extend(additional_results)
+                                
+                                # Add tool results to history
+                                for tool_call, result in zip(follow_up_message.tool_calls, additional_results):
+                                    self.add_to_history("tool", result, tool_call.id)
+                                
+                                # Add guidance for next iteration
+                                self.add_to_history("system",
+                                    f"The {len(additional_results)} additional tool(s) have completed. "
+                                    f"Review all tool results and provide your FINAL response to the user."
+                                )
+                                
+                                # Continue loop to get next response
+                                continue
+                            else:
+                                # No tool calls - extract text content
+                                follow_up_text = follow_up_message.content
+                                break
+                    
+                    # Check if we hit max iterations
+                    if iteration_count >= max_tool_iterations:
+                        logger.error(f"[PLANNER] Hit maximum tool iteration limit ({max_tool_iterations}). Forcing completion.")
+                        follow_up_text = "I've processed your request with multiple tool operations. Please let me know if you need any clarifications or adjustments."
                     
                     # Handle null/empty responses (can happen after timeouts)
                     if not follow_up_text or follow_up_text.strip() == "":
-                        logger.warning(f"[PLANNER] Empty follow-up response detected. Tool results: {[str(r)[:100] for r in tool_results]}")
+                        logger.warning(f"[PLANNER] Empty follow-up response detected after {iteration_count} iteration(s). Tool results: {[str(r)[:100] for r in tool_results]}")
                         # Check if any tool had a timeout
                         has_timeout = any("TOOL TIMEOUT" in str(r) for r in tool_results)
                         if has_timeout:
@@ -486,6 +556,7 @@ class PlanningAgent(BaseAgent):
                             output_message=follow_up_text,
                             tool_calls=self._tool_calls_log if self._tool_calls_log else None,
                             tool_results=self._tool_results_log if self._tool_results_log else None,
+                            tool_calls_detailed=self._tool_calls_detailed if hasattr(self, '_tool_calls_detailed') and self._tool_calls_detailed else None,
                             metadata={
                                 "tool_calls_made": len(self._tool_calls_log),
                                 "is_first_conversation": self.is_first_conversation,
@@ -509,6 +580,7 @@ class PlanningAgent(BaseAgent):
                             output_message=message.content,
                             tool_calls=None,
                             tool_results=None,
+                            tool_calls_detailed=None,
                             metadata={
                                 "no_tool_calls": True,
                                 "is_first_conversation": self.is_first_conversation,
@@ -533,6 +605,7 @@ class PlanningAgent(BaseAgent):
                     await agent_call_logger.complete_agent_call(
                         log_id=self._current_log_id,
                         output_message=response,
+                        tool_calls_detailed=None,
                         metadata={"fallback_path": True, "no_tool_support": True}
                     )
                     logger.info(f"[PLANNER] Completed agent call log (fallback): {self._current_log_id}")
@@ -785,6 +858,7 @@ This context was automatically retrieved from the user's history and is availabl
     async def _execute_tools_openai(self, tool_calls) -> list:
         """Execute tool calls and return results for OpenAI"""
         import json
+        import traceback
         results = []
 
         # Log tool calls
@@ -807,12 +881,30 @@ This context was automatically retrieved from the user's history and is availabl
         for tool_call in tool_calls:
             tool_name = tool_call.function.name
             tool_input = json.loads(tool_call.function.arguments)
+            
+            # Track detailed execution
+            detailed_call = {
+                "tool_call_id": tool_call.id,
+                "name": tool_name,
+                "input": tool_input,
+                "output": None,
+                "exception": None,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+                "duration_ms": None,
+                "success": False
+            }
 
             # Track tool usage by type
             tools_by_type = self.metadata["tools_by_type"]
             tools_by_type[tool_name] = tools_by_type.get(tool_name, 0) + 1
 
             logger.info(f"Executing tool: {tool_name} (total: {tools_by_type[tool_name]})")
+            
+            # Execute tool and track detailed results
+            tool_start_time = datetime.now(timezone.utc)
+            tool_result = None
+            tool_exception = None
             
             if tool_name == "manage_user_tasks":
                 try:
@@ -838,7 +930,7 @@ This context was automatically retrieved from the user's history and is availabl
                     }
                     # Delegate to task manager with a timeout to avoid hanging
                     # Increased timeout for complex operations like closing duplicate tasks
-                    timeout_seconds = 300
+                    timeout_seconds = 600
                     logger.info(f"[PLANNER] Starting task manager delegation (timeout: {timeout_seconds}s)...")
                     start_time = datetime.now(timezone.utc)
                     
@@ -876,7 +968,8 @@ This context was automatically retrieved from the user's history and is availabl
                             results.append(task_result_str)
                         except (json.JSONDecodeError, TypeError) as parse_error:
                             logger.warning(f"[PLANNER] Failed to parse task manager JSON response: {parse_error}, using raw response")
-                            results.append(str(task_result))
+                            tool_result = str(task_result)
+                            results.append(tool_result)
                         
                     except asyncio.TimeoutError:
                         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -893,15 +986,22 @@ This context was automatically retrieved from the user's history and is availabl
                             f"- Break your request into smaller, more specific operations\n"
                             f"- For bulk operations, process tasks in batches of 5-10 at a time"
                         )
+                        tool_exception = f"TimeoutError: Task manager timed out after {elapsed:.0f}s"
+                        tool_result = task_result
                         results.append(task_result)
                     except Exception as e:
                         elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
                         logger.error(f"[PLANNER] Exception delegating to task manager after {elapsed:.2f}s: {e}", exc_info=True)
                         task_result = f"TOOL ERROR: Failed to execute task management: {str(e)}"
+                        tool_exception = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                        tool_result = task_result
                         results.append(task_result)
                 except Exception as e:
                     logger.error(f"Error executing manage_user_tasks tool: {e}")
-                    results.append(f"Error managing tasks: {str(e)}")
+                    error_msg = f"Error managing tasks: {str(e)}"
+                    tool_exception = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                    tool_result = error_msg
+                    results.append(error_msg)
             elif tool_name == "manage_user_context":
                 try:
                     user_id = getattr(self, '_current_user_id', None)
@@ -910,10 +1010,14 @@ This context was automatically retrieved from the user's history and is availabl
                     
                     action = tool_input.get('action')
                     context_result = await self._manage_context_tool(action, tool_input, user_id)
+                    tool_result = context_result
                     results.append(context_result)
                 except Exception as e:
                     logger.error(f"Error executing manage_user_context tool: {e}")
-                    results.append(f"Error managing context: {str(e)}")
+                    error_msg = f"Error managing context: {str(e)}"
+                    tool_exception = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                    tool_result = error_msg
+                    results.append(error_msg)
             elif tool_name == "redis_storage":
                 try:
                     user_id = getattr(self, '_current_user_id', None)
@@ -921,26 +1025,46 @@ This context was automatically retrieved from the user's history and is availabl
                         raise ValueError("No user_id available for Redis storage")
                     
                     redis_result = await self._execute_redis_storage(tool_input, user_id)
+                    tool_result = redis_result
                     results.append(redis_result)
                 except Exception as e:
                     logger.error(f"Error executing redis_storage tool: {e}")
-                    results.append(f"Error with Redis storage: {str(e)}")
-            elif tool_name == "break_into_subtasks":
+                    error_msg = f"Error with Redis storage: {str(e)}"
+                    tool_exception = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                    tool_result = error_msg
+                    results.append(error_msg)
+            elif tool_name == "delegate_to_agents":
                 try:
                     user_id = getattr(self, '_current_user_id', None)
                     conversation_id = getattr(self, '_current_conversation_id', None)
                     if not user_id:
                         raise ValueError("No user_id available for subtask execution")
                     
-                    subtask_result = await self._execute_break_into_subtasks(tool_input, user_id, conversation_id)
+                    subtask_result = await self._execute_delegate_to_agents(tool_input, user_id, conversation_id)
+                    tool_result = subtask_result
                     results.append(subtask_result)
                 except Exception as e:
-                    logger.error(f"Error executing break_into_subtasks tool: {e}")
+                    logger.error(f"Error executing delegate_to_agents tool: {e}")
                     logger.error(traceback.format_exc())
-                    results.append(f"Error breaking into subtasks: {str(e)}")
+                    error_msg = f"Error delegating to agents: {str(e)}"
+                    tool_exception = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                    tool_result = error_msg
+                    results.append(error_msg)
             else:
                 logger.warning(f"Unknown tool: {tool_name}")
-                results.append(f"Unknown tool: {tool_name}")
+                error_msg = f"Unknown tool: {tool_name}"
+                tool_exception = f"UnknownToolError: {tool_name}"
+                tool_result = error_msg
+                results.append(error_msg)
+            
+            # Complete detailed tracking for this tool call
+            tool_end_time = datetime.now(timezone.utc)
+            detailed_call["completed_at"] = tool_end_time.isoformat()
+            detailed_call["duration_ms"] = int((tool_end_time - tool_start_time).total_seconds() * 1000)
+            detailed_call["output"] = tool_result
+            detailed_call["exception"] = tool_exception
+            detailed_call["success"] = tool_exception is None
+            self._tool_calls_detailed.append(detailed_call)
         
         # Log tool results
         tool_results_data = [{
@@ -952,7 +1076,12 @@ This context was automatically retrieved from the user's history and is availabl
         
         try:
             await agent_call_logger.update_tool_results(self._current_log_id, tool_results_data)
-            logger.info(f"[PLANNER] Logged {len(results)} tool results")
+            # Also update detailed tool calls
+            if hasattr(self, '_tool_calls_detailed') and self._tool_calls_detailed:
+                await agent_call_logger.update_tool_calls_detailed(self._current_log_id, self._tool_calls_detailed)
+                logger.info(f"[PLANNER] Logged {len(results)} tool results and {len(self._tool_calls_detailed)} detailed records")
+            else:
+                logger.info(f"[PLANNER] Logged {len(results)} tool results")
         except Exception as e:
             logger.error(f"[PLANNER] Failed to log tool results: {e}")
 
@@ -1091,7 +1220,7 @@ This context was automatically retrieved from the user's history and is availabl
             logger.error(traceback.format_exc())
             return f"Error with Redis storage: {str(e)}"
 
-    async def _execute_break_into_subtasks(
+    async def _execute_delegate_to_agents(
         self, 
         tool_input: Dict[str, Any], 
         user_id: str,
@@ -1263,6 +1392,6 @@ Subtasks are executing in the background. You can check their status in Redis us
                 return response
                 
         except Exception as e:
-            logger.error(f"[PLANNER] Error in break_into_subtasks: {e}")
+            logger.error(f"[PLANNER] Error in delegate_to_agents: {e}")
             logger.error(traceback.format_exc())
             return f"Error breaking into subtasks: {str(e)}"

@@ -37,6 +37,7 @@ class ContextManagerAgent(BaseAgent):
         self._current_agent_call_log_id = None  # Track current agent call log
         self._tool_calls_log = []  # Track tool calls for logging
         self._tool_results_log = []  # Track tool results for logging
+        self._tool_calls_detailed = []  # Track detailed tool execution info
 
         # Initialize metadata
         self.metadata = {
@@ -161,6 +162,7 @@ class ContextManagerAgent(BaseAgent):
         # Reset tool tracking for this message
         self._tool_calls_log = []
         self._tool_results_log = []
+        self._tool_calls_detailed = []
 
         logger.info(f"Processing message: {self.get_metadata_summary()}")
 
@@ -224,6 +226,7 @@ class ContextManagerAgent(BaseAgent):
                     output_message=response,
                     tool_calls=self._tool_calls_log if self._tool_calls_log else None,
                     tool_results=self._tool_results_log if self._tool_results_log else None,
+                    tool_calls_detailed=self._tool_calls_detailed if self._tool_calls_detailed else None,
                     metadata={
                         "final_history_length": len(self.conversation_history),
                         "files_created": self.metadata.get("files_created", 0),
@@ -323,12 +326,38 @@ class ContextManagerAgent(BaseAgent):
     async def _execute_tools_openai(self, tool_calls) -> List[Dict[str, Any]]:
         """Execute tool calls concurrently and return structured results"""
         import json
+        import traceback
 
         async def _run_tool(tool_call):
             tool_name = tool_call.function.name
             tool_args = json.loads(tool_call.function.arguments)
+            
+            # Track detailed execution
+            detailed_call = {
+                "tool_call_id": tool_call.id,
+                "name": tool_name,
+                "input": tool_args,
+                "output": None,
+                "exception": None,
+                "started_at": datetime.utcnow().isoformat(),
+                "completed_at": None,
+                "duration_ms": None,
+                "success": False
+            }
+            
+            start_time = datetime.utcnow()
             try:
                 result = await self._execute_tool({"name": tool_name, "arguments": tool_args})
+                end_time = datetime.utcnow()
+                
+                # Update detailed tracking
+                detailed_call["output"] = result
+                detailed_call["completed_at"] = end_time.isoformat()
+                detailed_call["duration_ms"] = int((end_time - start_time).total_seconds() * 1000)
+                detailed_call["success"] = True
+                
+                self._tool_calls_detailed.append(detailed_call)
+                
                 return {
                     "tool_call_id": tool_call.id,
                     "result": result,
@@ -336,8 +365,19 @@ class ContextManagerAgent(BaseAgent):
                     "timestamp": datetime.utcnow().isoformat()
                 }
             except Exception as tool_error:
+                end_time = datetime.utcnow()
                 error_msg = f"Error executing {tool_name}: {str(tool_error)}"
                 logger.error(error_msg)
+                
+                # Update detailed tracking with exception
+                detailed_call["output"] = error_msg
+                detailed_call["exception"] = f"{type(tool_error).__name__}: {str(tool_error)}\n{traceback.format_exc()}"
+                detailed_call["completed_at"] = end_time.isoformat()
+                detailed_call["duration_ms"] = int((end_time - start_time).total_seconds() * 1000)
+                detailed_call["success"] = False
+                
+                self._tool_calls_detailed.append(detailed_call)
+                
                 return {
                     "tool_call_id": tool_call.id,
                     "result": error_msg,

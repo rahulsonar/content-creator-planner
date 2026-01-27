@@ -194,6 +194,7 @@ model AgentCallLog {
   toolsEnabled      Boolean  @default(false)
   toolCalls         Json?    // Array of {name, arguments, timestamp, call_id}
   toolResults       Json?    // Array of {call_id, result, success, error, timestamp}
+  toolCallsDetailed Json?    // Complete tool execution details: {tool_call_id, name, input, output, exception, started_at, completed_at, duration_ms, success}
   
   // Execution Metrics
   status            AgentCallStatus @default(IN_PROGRESS)
