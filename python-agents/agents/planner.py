@@ -8,6 +8,7 @@ import asyncio
 import json
 import traceback
 from agents.base import BaseAgent
+from agents.tools import RedisStorageTool
 from config.prompts import (
     PLANNING_SYSTEM_PROMPT
 )
@@ -35,7 +36,10 @@ class PlanningAgent(BaseAgent):
         self.context_manager_agent = context_manager_agent
         self.task_manager_agent = task_manager_agent
         self.conversation_storage = conversation_storage
-        self.redis_client = redis_client
+        
+        # Initialize Redis storage tool
+        self.redis_tool = RedisStorageTool(redis_client) if redis_client else None
+        
         self.is_first_conversation = False
         self._context_cached = False  # Track if context already cached in this session
         self._current_user_id = None
@@ -123,36 +127,6 @@ class PlanningAgent(BaseAgent):
             {
                 "type": "function",
                 "function": {
-                    "name": "redis_storage",
-                    "description": "Store and retrieve temporary data using Redis key-value storage. Use this to save intermediate planning information, task lists, draft plans, or any other data you need to track during planning. Data can have optional TTL (time-to-live) for automatic expiration.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "operation": {
-                                "type": "string",
-                                "enum": ["set", "get", "delete", "exists"],
-                                "description": "Storage operation: 'set' (save data), 'get' (retrieve data), 'delete' (remove data), 'exists' (check if key exists)"
-                            },
-                            "key": {
-                                "type": "string",
-                                "description": "Storage key name. Use descriptive keys like 'planner:draft_plan', 'planner:task_list', etc. Will be automatically prefixed with user_id."
-                            },
-                            "value": {
-                                "type": "string",
-                                "description": "Value to store (for 'set' operation). Can be any JSON-serializable data - string, number, object, or array."
-                            },
-                            "ttl": {
-                                "type": "integer",
-                                "description": "Time-to-live in seconds (for 'set' operation). Default: 3600 (1 hour). Data will automatically expire after this period."
-                            }
-                        },
-                        "required": ["operation", "key"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "delegate_to_agents",
                     "description": "Break a complex task into smaller independent subtasks and delegate to child executor agents for parallel processing. Each subtask will be executed by an independent executor agent instance. Use this for complex tasks that can be parallelized.",
                     "parameters": {
@@ -202,6 +176,21 @@ class PlanningAgent(BaseAgent):
         
         # Initialize with comprehensive system prompt (no user name available yet)
         self._initialize_system_prompt()
+    
+    def get_available_tools(self) -> list:
+        """
+        Get list of available tools, including dynamically added tools like redis_storage.
+        
+        Returns:
+            List of tool definitions in OpenAI format
+        """
+        tools = self.tools_openai.copy()
+        
+        # Add redis_storage tool if available
+        if self.redis_tool and self.redis_tool.is_available():
+            tools.append(self.redis_tool.get_tool_definition())
+        
+        return tools
 
     def update_metadata(self, **kwargs):
         """Update metadata fields and track last activity, also sync with model client"""
@@ -447,9 +436,9 @@ class PlanningAgent(BaseAgent):
                     
                     # Get follow-up response WITH tools context
                     # Prepare tools for follow-up (filter if needed)
-                    tools = self.tools_openai
+                    tools = self.get_available_tools()
                     if self.is_first_conversation:
-                        tools = [tool for tool in self.tools_openai 
+                        tools = [tool for tool in tools 
                                 if tool["function"]["name"] != "request_user_context"]
                     
                     # Loop to handle potential multi-turn tool calling
@@ -841,9 +830,9 @@ This context was automatically retrieved from the user's history and is availabl
         
         if self.enable_openai_tools:
             # Only filter out context retrieval tool for first-time conversations
-            tools = self.tools_openai
+            tools = self.get_available_tools()
             if self.is_first_conversation:
-                tools = [tool for tool in self.tools_openai 
+                tools = [tool for tool in self.get_available_tools() 
                         if tool["function"]["name"] != "request_user_context"]
             kwargs["tools"] = tools
         
@@ -1024,9 +1013,15 @@ This context was automatically retrieved from the user's history and is availabl
                     if not user_id:
                         raise ValueError("No user_id available for Redis storage")
                     
-                    redis_result = await self._execute_redis_storage(tool_input, user_id)
-                    tool_result = redis_result
-                    results.append(redis_result)
+                    if not self.redis_tool:
+                        error_msg = "Redis storage tool not available. Please configure Redis connection."
+                        results.append(error_msg)
+                        tool_result = error_msg
+                        tool_exception = "RedisNotConfiguredError: Redis client not available"
+                    else:
+                        redis_result = await self.redis_tool.execute(tool_input, user_id, agent_type="planner")
+                        tool_result = redis_result
+                        results.append(redis_result)
                 except Exception as e:
                     logger.error(f"Error executing redis_storage tool: {e}")
                     error_msg = f"Error with Redis storage: {str(e)}"
@@ -1143,82 +1138,7 @@ This context was automatically retrieved from the user's history and is availabl
     # ============================================================================
     # PRIVATE METHODS - Redis Storage
     # ============================================================================
-    
-    async def _execute_redis_storage(self, tool_input: Dict[str, Any], user_id: str) -> str:
-        """
-        Handler for redis_storage tool. Stores and retrieves data from Redis.
-        
-        Args:
-            tool_input: Dict with 'operation', 'key', optional 'value' and 'ttl'
-            user_id: User identifier for key namespacing
-            
-        Returns:
-            Result message or retrieved data
-        """
-        try:
-            if not self.redis_client:
-                return "Error: Redis client not available. Please configure Redis connection."
-            
-            operation = tool_input.get("operation")
-            key = tool_input.get("key", "").strip()
-            
-            if not key:
-                return "Error: 'key' parameter is required."
-            
-            # Namespace the key with user_id to prevent conflicts
-            namespaced_key = f"planner:{user_id}:{key}"
-            
-            if operation == "set":
-                value = tool_input.get("value")
-                if value is None:
-                    return "Error: 'value' parameter is required for 'set' operation."
-                
-                ttl = tool_input.get("ttl", 3600)  # Default 1 hour
-                
-                # Store the value
-                success = await self.redis_client.set(namespaced_key, value, ttl=ttl)
-                
-                if success:
-                    logger.info(f"Stored data in Redis: {namespaced_key} (TTL: {ttl}s)")
-                    return f"Successfully stored data with key '{key}' (expires in {ttl} seconds)."
-                else:
-                    return f"Failed to store data with key '{key}'."
-            
-            elif operation == "get":
-                # Retrieve the value
-                value = await self.redis_client.get(namespaced_key)
-                
-                if value is not None:
-                    logger.info(f"Retrieved data from Redis: {namespaced_key}")
-                    # Return the value as a string (will be JSON if object/array was stored)
-                    return f"Retrieved data for key '{key}': {json.dumps(value) if not isinstance(value, str) else value}"
-                else:
-                    return f"No data found for key '{key}'. It may have expired or never been set."
-            
-            elif operation == "delete":
-                # Delete the key
-                success = await self.redis_client.delete(namespaced_key)
-                
-                if success:
-                    logger.info(f"Deleted data from Redis: {namespaced_key}")
-                    return f"Successfully deleted data with key '{key}'."
-                else:
-                    return f"Failed to delete key '{key}' or key does not exist."
-            
-            elif operation == "exists":
-                # Check if key exists
-                exists = await self.redis_client.exists(namespaced_key)
-                
-                logger.info(f"Checked existence in Redis: {namespaced_key} = {exists}")
-                return f"Key '{key}' {'exists' if exists else 'does not exist'}."
-            
-            else:
-                return f"Error: Invalid operation '{operation}'. Use 'set', 'get', 'delete', or 'exists'."
-        
-        except Exception as e:
-            logger.error(f"Error in redis_storage tool: {e}")
-            logger.error(traceback.format_exc())
-            return f"Error with Redis storage: {str(e)}"
+    # Redis storage is now handled by RedisStorageTool in agents/tools/redis_storage.py
 
     async def _execute_delegate_to_agents(
         self, 
@@ -1272,7 +1192,7 @@ This context was automatically retrieved from the user's history and is availabl
                 
                 # Store in Redis
                 key = f"subtask:{parent_task_id}:{subtask_id}:{user_id}"
-                await self.redis_client.set(
+                await self.redis_tool.redis_client.set(
                     key, 
                     json.dumps(subtask_context),
                     ex=3600  # Expire after 1 hour
@@ -1295,7 +1215,7 @@ This context was automatically retrieved from the user's history and is availabl
                 
                 executor = ExecutorAgent(
                     model_client=executor_model,
-                    redis_client=self.redis_client,
+                    redis_client=self.redis_tool.redis_client if self.redis_tool else None,
                     task_manager_agent=self.task_manager_agent,
                     executor_id=f"executor_{subtask_id}_{datetime.now(timezone.utc).timestamp()}"
                 )
@@ -1359,7 +1279,7 @@ Results:
                     
                     # Store aggregated results in Redis for later retrieval
                     results_key = f"subtask_results:{parent_task_id}:{user_id}"
-                    await self.redis_client.set(
+                    await self.redis_tool.redis_client.set(
                         results_key,
                         json.dumps({
                             "parent_task_id": parent_task_id,
