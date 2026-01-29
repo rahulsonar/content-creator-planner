@@ -3,7 +3,7 @@ Redis Storage Tool
 Independent tool for storing and retrieving temporary data using Redis
 Can be used by any agent that needs temporary storage
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import json
 import traceback
 from utils.logger import logger
@@ -49,10 +49,7 @@ class RedisStorageTool:
                             "type": "string",
                             "description": "Storage key name. Use descriptive keys like 'draft_plan', 'task_list', etc. Will be automatically prefixed with user_id and agent context."
                         },
-                        "value": {
-                            "type": "string",
-                            "description": "Value to store (for 'set' operation). Can be any JSON-serializable data - string, number, object, or array."
-                        },
+                        "value":  ["string", "number", "boolean", "object", "array", "null"],
                         "ttl": {
                             "type": "integer",
                             "description": "Time-to-live in seconds (for 'set' operation). Default: 3600 (1 hour). Data will automatically expire after this period."

@@ -34,7 +34,7 @@ This document outlines the design for transforming the Content Creator Planner a
 
 ```mermaid
 flowchart TD
-    Start(["User Query"]) --> Planner["🧠 Planner Agent<br/>Analyze & Plan"]
+    Start(["User Query"]) --> Planner["🧠 Planning Agent<br/>Analyze & Plan"]
     
     Planner -->|Direct Answer| DirectResponse["✅ Return Answer<br/>to User"]
     Planner -->|Task Plan| Execute["⚙️ Executor Agent<br/>Process Tasks"]
@@ -74,7 +74,7 @@ flowchart TD
 ```
 
 **Key Components:**
-- **Planner Agent**: Analyzes user queries and creates execution plans or provides direct answers
+- **Planning Agent**: Analyzes user queries and creates execution plans or provides direct answers
 - **Executor Agent**: Processes tasks sequentially based on dependency graph, executing tools or spawning child agents
 - **Synthesizer Agent**: Evaluates task results against goals and determines completion status
 - **Replan Agent**: Generates corrective tasks when goals are not fully met
@@ -103,9 +103,9 @@ flowchart TD
 
 This section defines the **canonical JSON formats** for all agent communications and data storage. These schemas are the single source of truth for implementation.
 
-### 1. Planner Agent Response Format
+### 1. Planning Agent Response Format
 
-The PlannerAgent MUST return JSON in this exact format:
+The PlanningAgent MUST return JSON in this exact format:
 
 ```json
 {
@@ -556,7 +556,7 @@ redis-cli KEYS "plan:*:*:{user_id}"
 
 Before storing any data in Redis, validate:
 
-✅ **Planner Response**:
+✅ **Planning Agent Response**:
 - `response_type` is either `"direct_answer"` or `"task_plan"`
 - If `task_plan`, `tasks[]` array is not empty
 - All task IDs in `dependency_graph` exist in `tasks[]`
@@ -643,7 +643,7 @@ Before storing any data in Redis, validate:
          │                          │
          ▼                          ▼
 ┌─────────────────┐        ┌─────────────────┐
-│  PlannerAgent   │        │ SynthesizerAgent│
+│ PlanningAgent   │        │ SynthesizerAgent│
 │                 │        │                 │
 │ • Task creation │        │ • Result analysis│
 │ • Dependency    │        │ • Gap detection │
@@ -745,7 +745,7 @@ Before storing any data in Redis, validate:
 
 **Purpose**:
 - Maintain tool definitions in one place
-- Inject tool knowledge into PlannerAgent system prompt
+- Inject tool knowledge into PlanningAgent system prompt
 - Provide schemas for ToolExecutor validation
 - Enable easy addition of new tools without prompt surgery
 
@@ -859,7 +859,7 @@ class ToolRegistry:
     
     @classmethod
     def format_for_prompt(cls) -> str:
-        """Generate markdown documentation for PlannerAgent system prompt"""
+        """Generate markdown documentation for PlanningAgent system prompt"""
         tools = cls.get_all_tools()
         output = "## Available Tools (Reference Only - Do NOT Execute)\n\n"
         output += "You create task plans that reference these tools. The TaskExecutor will execute them.\n\n"
@@ -889,11 +889,11 @@ class ToolRegistry:
         raise ValueError(f"Tool '{tool_name}' not found in registry")
 ```
 
-**Usage in PlannerAgent**:
+**Usage in PlanningAgent**:
 ```python
 from agents.tools.registry import ToolRegistry
 
-class PlannerAgent:
+class PlanningAgent:
     def __init__(self):
         # Inject tool definitions into system prompt at runtime
         self.system_prompt = f"""
@@ -927,7 +927,7 @@ class PlannerAgent:
 
 ---
 
-### 1. PlannerAgent (Enhanced)
+### 1. PlanningAgent (Enhanced)
 
 **Role**: Pure task creator - does not respond directly to user (except for simple Q&A)
 
@@ -981,7 +981,7 @@ class PlannerAgent:
 
 **Input**:
 - Original user query (goal)
-- Planner's output (tasks or direct response)
+- Planning Agent's output (tasks or direct response)
 - Execution results from Redis (all task outputs)
 - Conversation history
 
@@ -1533,7 +1533,7 @@ If unsure, prefer agent_call for flexibility.
    - Define output schema (goal_achieved, gaps, recommendations)
    - Add to config/prompts.py: `SYNTHESIZER_SYSTEM_PROMPT`
 
-3. **Enhance PlannerAgent** (`python-agents/agents/planner.py`)
+3. **Enhance PlanningAgent** (`python-agents/agents/planner.py`)
    - **Inject ToolRegistry into system prompt** via `ToolRegistry.format_for_prompt()`
    - Add structured output schema (response_type, tasks, dependency_graph)
    - Update prompt for task type classification using registry guidelines
@@ -1869,7 +1869,7 @@ Synthesizer MUST provide:
 1. **Review this document** - Validate approach, identify missing pieces
 2. **Finalize design decisions** - Resolve open questions
 3. **Create implementation tickets** - Break down phases into tasks
-4. **Start with Phase 1** - SynthesizerAgent + PlannerAgent enhancements
+4. **Start with Phase 1** - SynthesizerAgent + PlanningAgent enhancements
 5. **Iterate and test** - Test with real queries across complexity spectrum
 
 ---

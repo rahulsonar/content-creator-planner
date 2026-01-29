@@ -438,7 +438,7 @@ class PlanningAgent(BaseAgent):
                     # Prepare tools for follow-up (filter if needed)
                     tools = self.get_available_tools()
                     if self.is_first_conversation:
-                        tools = [tool for tool in self.get_available_tools() 
+                        tools = [tool for tool in tools 
                                 if tool["function"]["name"] != "request_user_context"]
                     
                     # Loop to handle potential multi-turn tool calling
@@ -1192,7 +1192,7 @@ This context was automatically retrieved from the user's history and is availabl
                 
                 # Store in Redis
                 key = f"subtask:{parent_task_id}:{subtask_id}:{user_id}"
-                await self.redis_client.set(
+                await self.redis_tool.redis_client.set(
                     key, 
                     json.dumps(subtask_context),
                     ex=3600  # Expire after 1 hour
@@ -1215,7 +1215,7 @@ This context was automatically retrieved from the user's history and is availabl
                 
                 executor = ExecutorAgent(
                     model_client=executor_model,
-                    redis_client=self.redis_client,
+                    redis_client=self.redis_tool.redis_client if self.redis_tool else None,
                     task_manager_agent=self.task_manager_agent,
                     executor_id=f"executor_{subtask_id}_{datetime.now(timezone.utc).timestamp()}"
                 )
@@ -1279,7 +1279,7 @@ Results:
                     
                     # Store aggregated results in Redis for later retrieval
                     results_key = f"subtask_results:{parent_task_id}:{user_id}"
-                    await self.redis_client.set(
+                    await self.redis_tool.redis_client.set(
                         results_key,
                         json.dumps({
                             "parent_task_id": parent_task_id,
