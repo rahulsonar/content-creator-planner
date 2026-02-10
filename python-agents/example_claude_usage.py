@@ -73,15 +73,12 @@ async def example_with_tools():
 async def example_agent_with_claude():
     """Example of initializing agents with Claude models"""
     from agents.planner import PlannerAgent
-    from agents.task_manager import TaskManagerAgent
     
     # Create clients for different agents
     planner_client = create_model_client("claude-opus-4")  # More powerful for planning
-    task_client = create_model_client("claude-sonnet-4.5")  # Efficient for task management
     
     # Initialize agents with Claude clients
     planner = PlannerAgent(planner_client)
-    task_manager = TaskManagerAgent(task_client)
     
     # Use agents normally
     response = await planner.process_message(
@@ -100,11 +97,9 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 
 # Agent Model Configuration (can use Claude models)
 PLANNER_MODEL=claude-opus-4
-TASK_MANAGER_MODEL=claude-sonnet-4.5
 CONTEXT_MANAGER_MODEL=claude-sonnet-4.5
 
 # Or keep using OpenAI
 PLANNER_MODEL=gpt-4
-TASK_MANAGER_MODEL=gpt-4
 CONTEXT_MANAGER_MODEL=gpt-4
 """

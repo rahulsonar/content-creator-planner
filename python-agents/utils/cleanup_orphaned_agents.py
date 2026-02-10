@@ -129,6 +129,20 @@ class OrphanedAgentCleaner:
                 "error": str(e)
             }
     
+    async def cleanup_orphaned_logs(self, hours_threshold: int = 1) -> int:
+        """
+        Cleanup orphaned agent logs older than specified hours threshold.
+        This is typically used on service startup to clean up logs from previous runs.
+        
+        Args:
+            hours_threshold: Age threshold in hours (default 1 hour)
+            
+        Returns:
+            Number of logs cleaned up
+        """
+        result = await self.cleanup_orphaned_calls(max_age_minutes=hours_threshold * 60)
+        return result.get('cleaned', 0)
+    
     async def get_orphaned_statistics(self, max_age_minutes: int = 30) -> dict:
         """
         Get statistics about orphaned agent calls without modifying them

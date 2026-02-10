@@ -6,11 +6,23 @@ async function main() {
   console.log('🌱 Starting seed...');
 
   // Clear existing data
+  await prisma.taskNote.deleteMany({});
+  await prisma.taskDependency.deleteMany({});
   await prisma.task.deleteMany({});
+  await prisma.project.deleteMany({});
+  await prisma.agentCallLog.deleteMany({});
+  await prisma.conversation.deleteMany({});
+  await prisma.userContext.deleteMany({});
   await prisma.user.deleteMany({});
   
   // Reset auto-increment counters
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "TaskNote" RESTART IDENTITY CASCADE;');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "TaskDependency" RESTART IDENTITY CASCADE;');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "Task" RESTART IDENTITY CASCADE;');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "Project" RESTART IDENTITY CASCADE;');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AgentCallLog" RESTART IDENTITY CASCADE;');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "Conversation" RESTART IDENTITY CASCADE;');
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "UserContext" RESTART IDENTITY CASCADE;');
   await prisma.$executeRawUnsafe('TRUNCATE TABLE "User" RESTART IDENTITY CASCADE;');
   
   console.log('✨ Cleared existing data');
@@ -25,6 +37,21 @@ async function main() {
     },
   });
   console.log('👤 Created default user:', defaultUser.email);
+
+  // Create default project
+  const defaultProject = await prisma.project.create({
+    data: {
+      name: 'Content Creator Tasks',
+      description: 'Default project for YouTube content creation and channel management',
+      status: 'ACTIVE',
+      isDefault: true,
+      userId: defaultUser.id,
+      color: '#3b82f6',
+      icon: '🎬',
+      tags: ['youtube', 'content-creation', 'default'],
+    },
+  });
+  console.log('📁 Created default project:', defaultProject.name);
 
   // Create YouTube content creator tasks
   const tasks = [
@@ -230,6 +257,7 @@ async function main() {
         ...task,
         taskKey: 'TEMP',
         userId: defaultUser.id,
+        projectId: defaultProject.id,
       },
     });
     
@@ -256,6 +284,7 @@ async function main() {
       estimatedHours: 30,
       actualHours: 12,
       userId: defaultUser.id,
+      projectId: defaultProject.id,
     },
   });
   
@@ -324,6 +353,7 @@ async function main() {
       data: {
         ...subtask,
         userId: defaultUser.id,
+        projectId: defaultProject.id,
         taskKey: 'TEMP',
       },
     });

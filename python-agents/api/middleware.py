@@ -11,17 +11,17 @@ async def verify_internal_request(
     x_internal_secret: str = Header(None),
     x_user_id: str = Header(None),
     x_user_name: str = Header(None)
-) -> tuple[str, str | None]:
+) -> tuple[int, str | None]:
     """
     Verify internal service-to-service request
     
     Args:
         x_internal_secret: Shared secret from Next.js
-        x_user_id: User ID from Next.js JWT
+        x_user_id: User ID from Next.js JWT (as string from header)
         x_user_name: User name from Next.js JWT (optional)
         
     Returns:
-        Tuple of (validated user ID, user name)
+        Tuple of (validated user ID as int, user name)
         
     Raises:
         HTTPException: If authentication fails
@@ -49,5 +49,15 @@ async def verify_internal_request(
             detail="Missing user ID"
         )
     
-    logger.debug(f"Verified internal request for user: {x_user_id} ({x_user_name})")
-    return x_user_id, x_user_name
+    # Parse user_id to int (headers are always strings)
+    try:
+        user_id_int = int(x_user_id)
+    except ValueError:
+        logger.warning(f"Invalid user ID format: {x_user_id}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid user ID format"
+        )
+    
+    logger.debug(f"Verified internal request for user: {user_id_int} ({x_user_name})")
+    return user_id_int, x_user_name

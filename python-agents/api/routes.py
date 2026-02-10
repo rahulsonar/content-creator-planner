@@ -5,17 +5,14 @@ FastAPI route definitions for agent endpoints
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from schemas.requests import (
-    PlanningRequest,
-    ChatRequest,
-    TaskUpdateRequest,
-    TaskBatchUpdateRequest
+    ChatRequest
 )
 from schemas.responses import (
-    PlanningResponse,
     ChatResponse
 )
 from api.middleware import verify_internal_request
-from agents import PlanningAgent, ModelOrchestrator, ContextManagerAgent, UserTaskManagerAgent
+from agents import PlanningAgent, ModelOrchestrator, ContextManagerAgent
+from agents.workflow_orchestrator import WorkflowOrchestrator
 from models import create_model_client
 from storage.conversation import ConversationStorage
 from storage.database import db_manager
@@ -25,7 +22,6 @@ from utils.logger import logger
 from utils.cleanup_orphaned_agents import orphaned_cleaner
 from config.settings import settings
 import httpx
-import asyncio
 
 # Initialize conversation storage
 conversation_storage = ConversationStorage()
@@ -39,7 +35,7 @@ INTERNAL_API_SECRET = settings.INTERNAL_API_SECRET if hasattr(settings, 'INTERNA
 
 async def _handle_dummy_chat(
     request: ChatRequest,
-    user_id: str,
+    user_id: int,
     conversation_storage: ConversationStorage
 ) -> ChatResponse:
     """
@@ -47,7 +43,7 @@ async def _handle_dummy_chat(
     
     Args:
         request: Chat request
-        user_id: User ID
+        user_id: User ID (integer)
         conversation_storage: Conversation storage instance
         
     Returns:
@@ -126,12 +122,12 @@ Currently in DUMMY MODE - responses are static. Set USE_DUMMY_AI=false to enable
     )
 
 
-async def notify_websocket(conversation_id: str, message: str = None, role: str = "assistant", model: str = None, status: str = None, error: str = None):
+async def notify_websocket(conversation_id: int, message: str = None, role: str = "assistant", model: str = None, status: str = None, error: str = None):
     """
     Send webhook notification to Next.js to update WebSocket clients
     
     Args:
-        conversation_id: The conversation ID
+        conversation_id: The conversation ID (integer)
         message: The assistant's message (if completed)
         role: Message role
         model: Model used
@@ -174,7 +170,7 @@ async def notify_websocket(conversation_id: str, message: str = None, role: str 
 
 
 async def process_chat_background(
-    conversation_id: str,
+    conversation_id: int,
     user_id: str,
     message: str,
     context: dict,
@@ -186,7 +182,186 @@ async def process_chat_background(
     Background task to process chat message with agent
     
     Args:
-        conversation_id: Conversation ID
+        conversation_id: Conversation ID (integer)
+        user_id: User ID
+        message: User's message
+        context: User context
+        message_id: Unique message ID for tracking
+        conversation_messages: Full conversation history
+        user_name: Optional user name for personalization
+    """
+    try:
+        logger.info(f"[Background] Processing message for conversation {conversation_id}")
+        
+        # Notify that processing has started
+        await notify_websocket(conversation_id, status="processing")
+        
+        # Check if workflow orchestrator is enabled
+        use_workflow = getattr(settings, 'USE_WORKFLOW_ORCHESTRATOR', False)
+        
+        if use_workflow:
+            await process_with_workflow_orchestrator(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                message=message,
+                context=context,
+                message_id=message_id,
+                conversation_messages=conversation_messages,
+                user_name=user_name
+            )
+        else:
+            await process_with_planner_agent(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                message=message,
+                context=context,
+                message_id=message_id,
+                conversation_messages=conversation_messages,
+                user_name=user_name
+            )
+        
+    except Exception as e:
+        logger.error(f"[Background] Error processing chat: {e}")
+        # Notify of error
+        await notify_websocket(
+            conversation_id,
+            error=str(e)
+        )
+
+
+async def process_with_workflow_orchestrator(
+    conversation_id: int,
+    user_id: str,
+    message: str,
+    context: dict,
+    message_id: str,
+    conversation_messages: list,
+    user_name: str | None = None
+):
+    """
+    Process chat message using the WorkflowOrchestrator (Plan → Execute → Synthesize → Replan)
+    
+    Args:
+        conversation_id: Conversation ID (integer)
+        user_id: User ID
+        message: User's message
+        context: User context
+        message_id: Unique message ID for tracking
+        conversation_messages: Full conversation history
+        user_name: Optional user name for personalization
+    """
+    try:
+        logger.info(f"[Workflow] Starting workflow orchestration for conversation {conversation_id}")
+        
+        # Get models from orchestrator
+        planner_model = ModelOrchestrator.get_model_for_agent("planning")
+        context_model = ModelOrchestrator.get_model_for_agent("context_manager")
+        
+        # Initialize clients
+        metadata_base = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "message_id": message_id
+        }
+        
+        planner_client = create_model_client(planner_model, metadata={**metadata_base, "agent_name": "planning"})
+        context_client = create_model_client(context_model, metadata={**metadata_base, "agent_name": "context_manager"})
+        synthesizer_client = create_model_client(planner_model, metadata={**metadata_base, "agent_name": "synthesizer"})
+        
+        # Get database session and Redis client
+        async with db_manager.get_session() as db_session:
+            redis_client = await get_redis_client(settings)
+            
+            # Create supporting agents
+            context_manager = ContextManagerAgent(context_client, db_session=db_session)
+            
+            
+            # Create PlanningAgent in workflow mode
+            # In workflow mode, planner only has access to utility tools (redis, context reading)
+            # Execution tools (manage_user_tasks, delegate_to_agents) are filtered out
+            # This ensures planner creates task plans instead of executing tasks directly
+            planner_agent = PlanningAgent(
+                planner_client,
+                enable_openai_tools=True,  # Keep tools enabled
+                workflow_mode=True,  # But restrict to planning-only tools
+                context_manager_agent=context_manager,
+                conversation_storage=conversation_storage,
+                redis_client=redis_client
+            )
+            
+            # Set user information
+            if user_name:
+                planner_agent._current_user_name = user_name
+            
+            # Load conversation history
+            if conversation_messages:
+                planner_agent.load_conversation_history(conversation_messages)
+            
+            # Create WorkflowOrchestrator
+            orchestrator = WorkflowOrchestrator(
+                planner_agent=planner_agent,
+                model_client=synthesizer_client,
+                redis_client=redis_client,
+                conversation_storage=conversation_storage,
+                websocket_manager=None,  # Will use notify_websocket function instead
+                max_iterations=getattr(settings, 'MAX_WORKFLOW_ITERATIONS', 3)
+            )
+            
+            # Execute workflow
+            result = await orchestrator.execute_workflow(
+                user_query=message,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                user_id=user_id,
+                user_name=user_name
+            )
+            
+            # Extract response
+            response_message = result.get('message', 'Request processed.')
+            metadata = result.get('metadata', {})
+            
+            # Save assistant response
+            await conversation_storage.save_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=response_message,
+                model=planner_model
+            )
+            
+            # Notify WebSocket clients of completion
+            await notify_websocket(
+                conversation_id,
+                message=response_message,
+                role="assistant",
+                model=planner_model
+            )
+            
+            logger.info(
+                f"[Workflow] Completed in {metadata.get('iterations', 1)} iteration(s), "
+                f"{metadata.get('total_tasks_executed', 0)} tasks executed"
+            )
+            
+    except Exception as e:
+        logger.error(f"[Workflow] Error in workflow orchestration: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise
+
+
+async def process_with_planner_agent(
+    conversation_id: int,
+    user_id: str,
+    message: str,
+    context: dict,
+    message_id: str,
+    conversation_messages: list,
+    user_name: str | None = None
+):
+    """
+    Process chat message using the original PlanningAgent (legacy flow)
+    
+    Args:
+        conversation_id: Conversation ID (integer)
         user_id: User ID
         message: User's message
         context: User context
@@ -203,9 +378,8 @@ async def process_chat_background(
         # Get models from orchestrator (reads from env config)
         planner_model = ModelOrchestrator.get_model_for_agent("planning")
         context_model = ModelOrchestrator.get_model_for_agent("context_manager")
-        task_model = ModelOrchestrator.get_model_for_agent("task_manager")
         
-        logger.info(f"[Models] Planning Agent: {planner_model}, Context Manager: {context_model}, Task Manager: {task_model}")
+        logger.info(f"[Models] Planning Agent: {planner_model}, Context Manager: {context_model}")
         
         # Initialize clients with metadata for API tracking
         metadata = {
@@ -223,27 +397,18 @@ async def process_chat_background(
         }
         context_client = create_model_client(context_model, metadata=context_metadata)
         
-        # Create task manager agent
-        task_metadata = {
-            "conversation_id": conversation_id,
-            "user_id": user_id,
-            "agent_name": "task_manager"
-        }
-        task_client = create_model_client(task_model, metadata=task_metadata)
-        
         # Get database session
         async with db_manager.get_session() as db_session:
             # Get Redis client
             redis_client = await get_redis_client(settings)
             
             context_manager = ContextManagerAgent(context_client, db_session=db_session)
-            task_manager = UserTaskManagerAgent(task_client, redis_client=redis_client)
+            
         
             agent = PlanningAgent(
                 client, 
                 enable_openai_tools=settings.ENABLE_OPENAI_TOOLS, 
                 context_manager_agent=context_manager,
-                task_manager_agent=task_manager,
                 conversation_storage=conversation_storage,
                 redis_client=redis_client
             )
@@ -333,13 +498,8 @@ async def planning_chat(
                 conversation_type="planning",
                 title=title
             )
-        else:
-            # If conversation exists, check if it needs to be claimed by authenticated user
-            conversation = await conversation_storage.get_conversation(conversation_id)
-            if conversation and conversation.get("userId") == "anonymous" and user_id != "anonymous":
-                # Claim this anonymous conversation for the authenticated user
-                await conversation_storage.update_conversation_user(conversation_id, user_id)
-                logger.info(f"Claimed anonymous conversation {conversation_id} for user {user_id}")
+        # Note: Anonymous user logic removed - all users must be authenticated
+        # If conversation exists, it already belongs to the current user
         
         # Save user message
         await conversation_storage.save_message(

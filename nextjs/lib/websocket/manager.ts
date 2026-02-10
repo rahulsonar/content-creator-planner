@@ -7,7 +7,7 @@ import { WebSocket } from 'ws';
 
 interface ConnectionInfo {
   ws: WebSocket;
-  userId: string;
+  userId: number;
   conversationId: string;
   connectedAt: Date;
 }
@@ -22,7 +22,7 @@ class WebSocketManager {
   /**
    * Add a WebSocket connection for a conversation
    */
-  addConnection(conversationId: string, ws: WebSocket, userId: string): void {
+  addConnection(conversationId: string, ws: WebSocket, userId: number): void {
     if (!this.connections.has(conversationId)) {
       this.connections.set(conversationId, new Set());
     }

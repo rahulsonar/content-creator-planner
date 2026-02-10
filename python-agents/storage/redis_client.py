@@ -57,7 +57,7 @@ class RedisClient:
     
     async def save_message(
         self,
-        conversation_id: str,
+        conversation_id: int,
         message: Dict[str, Any],
         ttl: Optional[int] = None
     ) -> bool:
@@ -65,7 +65,7 @@ class RedisClient:
         Save a message to a conversation
         
         Args:
-            conversation_id: Unique conversation identifier
+            conversation_id: Unique conversation identifier (integer)
             message: Message data (role, content, timestamp, etc.)
             ttl: Optional time-to-live in seconds
             
@@ -91,7 +91,7 @@ class RedisClient:
     
     async def get_messages(
         self,
-        conversation_id: str,
+        conversation_id: int,
         limit: Optional[int] = None,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
@@ -99,7 +99,7 @@ class RedisClient:
         Retrieve messages from a conversation
         
         Args:
-            conversation_id: Unique conversation identifier
+            conversation_id: Unique conversation identifier (integer)
             limit: Maximum number of messages to retrieve
             offset: Number of messages to skip from start
             

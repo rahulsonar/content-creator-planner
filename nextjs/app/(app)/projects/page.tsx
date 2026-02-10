@@ -51,7 +51,7 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>('all');
-  const [updatingDefaultId, setUpdatingDefaultId] = useState<string | null>(null);
+  const [updatingDefaultId, setUpdatingDefaultId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchProjects();
@@ -73,7 +73,7 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleSetDefault = async (projectId: string) => {
+  const handleSetDefault = async (projectId: number) => {
     if (updatingDefaultId) return;
     try {
       setUpdatingDefaultId(projectId);

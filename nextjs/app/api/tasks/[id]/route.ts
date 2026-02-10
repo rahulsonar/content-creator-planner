@@ -198,7 +198,7 @@ export async function PATCH(
       }
     }
     if (typeof priority === 'string') updateData.priority = priority;
-    if (typeof projectId === 'string' || projectId === null) {
+    if (typeof projectId === 'number' || projectId === null) {
       updateData.projectId = projectId || null;
     }
     if (typeof assignedTo === 'string' || assignedTo === null) {

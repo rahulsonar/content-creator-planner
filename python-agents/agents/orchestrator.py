@@ -25,7 +25,7 @@ class ModelOrchestrator:
         Get the configured model for an agent from environment
         
         Args:
-            agent_type: Type of agent (planning, task_manager, context_manager)
+            agent_type: Type of agent (planning, context_manager)
             
         Returns:
             Model name from env configuration
@@ -36,7 +36,6 @@ class ModelOrchestrator:
         # Map agent types to env settings
         env_mapping = {
             "planning": settings.PLANNER_MODEL,
-            "task_manager": settings.TASK_MANAGER_MODEL,
             "context_manager": settings.CONTEXT_MANAGER_MODEL,
         }
         

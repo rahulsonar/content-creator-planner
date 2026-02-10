@@ -125,10 +125,10 @@ async def insert_tasks_to_db(
                         if isinstance(note, dict) and note.get("content"):
                             note_query = """
                                 INSERT INTO "TaskNote" (
-                                    id, "taskId", content, "createdBy",
+                                    "taskId", content, "createdBy",
                                     "createdAt", "updatedAt"
                                 ) VALUES (
-                                    gen_random_uuid()::text, $1, $2, $3,
+                                    $1, $2, $3,
                                     NOW(), NOW()
                                 )
                             """

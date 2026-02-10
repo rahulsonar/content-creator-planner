@@ -31,17 +31,44 @@ function verifyToken(token) {
 const wsConnections = new Map(); // conversationId -> Set<WebSocket>
 const processingConversations = new Set(); // Track conversations with ongoing agent processing
 
-function addConnection(conversationId, ws, userId) {
+async function addConnection(conversationId, ws, userId) {
   if (!wsConnections.has(conversationId)) {
     wsConnections.set(conversationId, new Set());
   }
   wsConnections.get(conversationId).add({ ws, userId });
   console.log(`[WS Server] Added connection for ${conversationId}, user ${userId}`);
   
-  // Check if this conversation is currently being processed
-  if (processingConversations.has(conversationId)) {
-    console.log(`[WS Server] Conversation ${conversationId} is currently processing, notifying client`);
-    ws.send(JSON.stringify({ type: 'processing' }));
+  // BUGFIX: Check actual database for IN_PROGRESS logs, not just in-memory state
+  // The in-memory Set can get out of sync after server restarts or crashes
+  try {
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    
+    const inProgressCount = await prisma.agentCallLog.count({
+      where: {
+        conversationId: parseInt(conversationId),
+        status: 'IN_PROGRESS'
+      }
+    });
+    
+    await prisma.$disconnect();
+    
+    if (inProgressCount > 0) {
+      console.log(`[WS Server] Found ${inProgressCount} IN_PROGRESS logs for conversation ${conversationId}`);
+      processingConversations.add(conversationId);
+      ws.send(JSON.stringify({ type: 'processing' }));
+    } else {
+      // Ensure we remove from processing set if no actual processing is happening
+      processingConversations.delete(conversationId);
+      console.log(`[WS Server] No IN_PROGRESS logs for conversation ${conversationId}`);
+    }
+  } catch (error) {
+    console.error(`[WS Server] Error checking processing state for ${conversationId}:`, error);
+    // Fallback to in-memory state on error
+    if (processingConversations.has(conversationId)) {
+      console.log(`[WS Server] Falling back to in-memory state - conversation ${conversationId} marked as processing`);
+      ws.send(JSON.stringify({ type: 'processing' }));
+    }
   }
 }
 
@@ -181,7 +208,7 @@ app.prepare().then(() => {
               return;
             }
             conversationId = message.conversationId;
-            addConnection(conversationId, ws, userId);
+            await addConnection(conversationId, ws, userId);
             ws.send(JSON.stringify({ type: 'subscribed', conversationId }));
             break;
 

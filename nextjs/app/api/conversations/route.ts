@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   try {
     // Extract user info from token
     const token = request.cookies.get('auth-token')?.value;
-    let userId = 'anonymous';
+    let userId: number | null = null;
     
     if (token) {
       const decoded = verifyToken(token);
@@ -17,9 +17,9 @@ export async function GET(request: NextRequest) {
 
     // Fetch conversations for the user, ordered by most recent
     const conversations = await prisma.conversation.findMany({
-      where: {
+      where: userId !== null ? {
         userId: userId,
-      },
+      } : {},
       orderBy: {
         updatedAt: 'desc',
       },

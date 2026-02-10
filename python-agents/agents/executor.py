@@ -20,7 +20,6 @@ class ExecutorAgent(BaseAgent):
         self, 
         model_client, 
         redis_client=None,
-        task_manager_agent=None,
         executor_id: Optional[str] = None
     ):
         """
@@ -29,12 +28,10 @@ class ExecutorAgent(BaseAgent):
         Args:
             model_client: LLM client (OpenAI or Claude)
             redis_client: Redis client for fetching task context
-            task_manager_agent: Task manager agent for database operations
             executor_id: Unique identifier for this executor instance
         """
         super().__init__(model_client, "executor")
         self.redis_client = redis_client
-        self.task_manager_agent = task_manager_agent
         self.executor_id = executor_id or f"executor_{datetime.now(timezone.utc).timestamp()}"
         self._current_subtask_id = None
         self._parent_task_id = None
@@ -60,7 +57,7 @@ class ExecutorAgent(BaseAgent):
         subtask_id: str,
         parent_task_id: str,
         user_id: str,
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Execute a specific subtask by fetching its context from Redis.
@@ -69,7 +66,7 @@ class ExecutorAgent(BaseAgent):
             subtask_id: Unique identifier for the subtask
             parent_task_id: Parent task identifier
             user_id: User identifier
-            conversation_id: Optional conversation identifier
+            conversation_id: Optional conversation identifier (integer)
             
         Returns:
             Dict with execution results and status
@@ -276,8 +273,7 @@ Provide a detailed execution plan and output for this task.
             # Get response from LLM
             response = await self.model_client.chat(
                 messages=self.conversation_history,
-                temperature=0.7,
-                max_tokens=2000
+                #temperature=0.7
             )
             
             # Extract content

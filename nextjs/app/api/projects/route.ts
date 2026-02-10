@@ -7,11 +7,13 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') as ProjectStatus | null;
-    const userId = request.headers.get('x-user-id'); // This would come from middleware
+    const userIdHeader = request.headers.get('x-user-id'); // This would come from middleware
 
-    if (!userId) {
+    if (!userIdHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    const userId = parseInt(userIdHeader, 10);
 
     // Verify user exists (in case of stale token)
     const userExists = await prisma.user.findUnique({
@@ -118,11 +120,13 @@ export async function GET(request: Request) {
 // POST /api/projects - Create a new project
 export async function POST(request: Request) {
   try {
-    const userId = request.headers.get('x-user-id'); // This would come from middleware
+    const userIdHeader = request.headers.get('x-user-id'); // This would come from middleware
 
-    if (!userId) {
+    if (!userIdHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    const userId = parseInt(userIdHeader, 10);
 
     const body = await request.json();
     const { name, description, status, startDate, endDate, dueDate, color, icon, tags, isDefault } = body;
@@ -171,14 +175,16 @@ export async function POST(request: Request) {
 // PATCH /api/projects - Update project (set default)
 export async function PATCH(request: Request) {
   try {
-    const userId = request.headers.get('x-user-id'); // This would come from middleware
+    const userIdHeader = request.headers.get('x-user-id'); // This would come from middleware
 
-    if (!userId) {
+    if (!userIdHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = parseInt(userIdHeader, 10);
+
     const body = await request.json();
-    const { projectId, isDefault } = body as { projectId?: string; isDefault?: boolean };
+    const { projectId, isDefault } = body as { projectId?: number; isDefault?: boolean };
 
     if (!projectId) {
       return NextResponse.json({ error: 'Project ID is required' }, { status: 400 });

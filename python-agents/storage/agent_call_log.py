@@ -39,28 +39,33 @@ class AgentCallLogger:
     
     async def start_agent_call(
         self,
-        user_id: str,
+        user_id: int,
         agent_name: str,
         model_name: str,
         message_id: str,
-        conversation_id: Optional[str] = None,
+        conversation_id: Optional[int] = None,
         session_id: Optional[str] = None,
         agent_type: Optional[str] = None,
         agent_version: Optional[str] = None,
         input_message: Optional[str] = None,
         tools_enabled: bool = False,
         metadata: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None
-    ) -> str:
+        tags: Optional[List[str]] = None,
+        iteration_number: Optional[int] = None,
+        workflow_phase: Optional[str] = None,
+        parent_call_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        task_type: Optional[str] = None
+    ) -> int:
         """
         Start logging an agent call
         
         Args:
-            user_id: User identifier
+            user_id: User identifier (integer)
             agent_name: Name of the agent (e.g., "planner", "task_manager")
             model_name: LLM model being used
             message_id: Unique message ID (tracks across multiple agent calls)
-            conversation_id: Optional conversation ID
+            conversation_id: Optional conversation ID (integer)
             session_id: Optional session ID
             agent_type: Type/category of agent
             agent_version: Version of the agent
@@ -68,6 +73,11 @@ class AgentCallLogger:
             tools_enabled: Whether tools are enabled
             metadata: Additional metadata
             tags: Tags for filtering
+            iteration_number: Which iteration in the workflow (1, 2, 3...)
+            workflow_phase: "planning" | "executing" | "synthesizing" | "replanning"
+            parent_call_id: Link to parent agent call (for replanning chains)
+            task_id: Reference to task being executed (from Redis)
+            task_type: "tool_call" | "agent_call" (if executing a task)
             
         Returns:
             Agent call log ID
@@ -76,23 +86,26 @@ class AgentCallLogger:
             async with self.db.get_session() as session:
                 query = text("""
                     INSERT INTO "AgentCallLog" (
-                        id, "userId", "conversationId", "messageId", "sessionId",
+                        "userId", "conversationId", "messageId", "sessionId",
                         "agentName", "agentType", "agentVersion",
                         "modelName", "modelProvider",
                         "inputMessage", "toolsEnabled",
+                        "iterationNumber", "workflowPhase", "parentCallId",
+                        "taskId", "taskType",
                         status, "startedAt", metadata, tags,
                         "createdAt", "updatedAt"
                     )
-                    VALUES (:id, :userId, :conversationId, :messageId, :sessionId,
+                    VALUES (:userId, :conversationId, :messageId, :sessionId,
                            :agentName, :agentType, :agentVersion,
                            :modelName, :modelProvider,
                            :inputMessage, :toolsEnabled,
+                           :iterationNumber, :workflowPhase, :parentCallId,
+                           :taskId, :taskType,
                            :status, :startedAt, CAST(:metadata AS jsonb), :tags,
                            :createdAt, :updatedAt)
                     RETURNING id
                 """)
                 
-                log_id = f"acl_{uuid.uuid4().hex[:16]}"
                 now = datetime.now(timezone.utc)
                 
                 # Prepare metadata
@@ -102,7 +115,6 @@ class AgentCallLogger:
                 result = await session.execute(
                     query,
                     {
-                        "id": log_id,
                         "userId": user_id,
                         "conversationId": conversation_id,
                         "messageId": message_id,
@@ -114,6 +126,11 @@ class AgentCallLogger:
                         "modelProvider": "openai",
                         "inputMessage": input_message,
                         "toolsEnabled": tools_enabled,
+                        "iterationNumber": iteration_number,
+                        "workflowPhase": workflow_phase,
+                        "parentCallId": parent_call_id,
+                        "taskId": task_id,
+                        "taskType": task_type,
                         "status": "IN_PROGRESS",
                         "startedAt": now.replace(tzinfo=None),  # Remove timezone for DB
                         "metadata": meta_json,
@@ -122,19 +139,26 @@ class AgentCallLogger:
                         "updatedAt": now.replace(tzinfo=None)   # Remove timezone for DB
                     }
                 )
+                
+                # Get the auto-generated ID
+                row = result.fetchone()
+                log_id = row[0] if row else None
+                
                 await session.commit()
                 
-                logger.info(f"Started agent call log: {log_id} for agent={agent_name}, message_id={message_id}")
-                return log_id
+                if log_id:
+                    logger.info(f"Started agent call log: {log_id} for agent={agent_name}, message_id={message_id}")
+                    return log_id
+                else:
+                    raise Exception("Failed to get generated ID from INSERT")
             
         except Exception as e:
             logger.error(f"Failed to start agent call log: {str(e)}")
-            # Return a fallback ID so the agent can continue
-            return f"acl_fallback_{uuid.uuid4().hex[:8]}"
+            raise
     
     async def complete_agent_call(
         self,
-        log_id: str,
+        log_id: int,
         output_message: Optional[str] = None,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
         tool_results: Optional[List[Dict[str, Any]]] = None,
@@ -142,7 +166,10 @@ class AgentCallLogger:
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        completion_score: Optional[float] = None,
+        synthesis_action: Optional[str] = None,
+        gaps_identified: Optional[int] = None
     ):
         """
         Complete an agent call with success
@@ -157,18 +184,21 @@ class AgentCallLogger:
             completion_tokens: Token count for completion
             total_tokens: Total tokens used
             metadata: Additional metadata to merge
+            completion_score: (Synthesizer only) 0-1 score for goal achievement
+            synthesis_action: (Synthesizer only) "publish" | "partial_publish" | "replan"
+            gaps_identified: (Synthesizer only) Number of gaps found
         """
         try:
             async with self.db.get_session() as session:
                 completed_at = datetime.now(timezone.utc).replace(tzinfo=None)  # Remove timezone for DB
                 
-                # Update query - calculate duration using NOW()
+                # Update query - calculate duration using completedAt
                 update_query = text("""
                     UPDATE "AgentCallLog"
                     SET 
                         status = :status,
                         "completedAt" = :completedAt,
-                        "durationMs" = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - "startedAt")) * 1000,
+                        "durationMs" = EXTRACT(EPOCH FROM (:completedAt - "startedAt")) * 1000,
                         "outputMessage" = :outputMessage,
                         "toolCalls" = CAST(:toolCalls AS jsonb),
                         "toolResults" = CAST(:toolResults AS jsonb),
@@ -176,6 +206,9 @@ class AgentCallLogger:
                         "promptTokens" = :promptTokens,
                         "completionTokens" = :completionTokens,
                         "totalTokens" = :totalTokens,
+                        "completionScore" = :completionScore,
+                        "synthesisAction" = :synthesisAction,
+                        "gapsIdentified" = :gapsIdentified,
                         metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:metadata AS jsonb),
                         "updatedAt" = :updatedAt
                     WHERE id = :log_id
@@ -193,6 +226,9 @@ class AgentCallLogger:
                         "promptTokens": prompt_tokens,
                         "completionTokens": completion_tokens,
                         "totalTokens": total_tokens,
+                        "completionScore": completion_score,
+                        "synthesisAction": synthesis_action,
+                        "gapsIdentified": gaps_identified,
                         "metadata": json.dumps(metadata) if metadata else "{}",
                         "updatedAt": completed_at,
                         "log_id": log_id
@@ -207,7 +243,7 @@ class AgentCallLogger:
     
     async def fail_agent_call(
         self,
-        log_id: str,
+        log_id: int,
         error: str,
         error_type: Optional[str] = None,
         stack_trace: Optional[str] = None,
@@ -264,7 +300,7 @@ class AgentCallLogger:
     
     async def update_tool_calls(
         self,
-        log_id: str,
+        log_id: int,
         tool_calls: List[Dict[str, Any]]
     ):
         """
@@ -297,7 +333,7 @@ class AgentCallLogger:
     
     async def update_tool_results(
         self,
-        log_id: str,
+        log_id: int,
         tool_results: List[Dict[str, Any]]
     ):
         """
@@ -330,7 +366,7 @@ class AgentCallLogger:
     
     async def update_tool_calls_detailed(
         self,
-        log_id: str,
+        log_id: int,
         tool_calls_detailed: List[Dict[str, Any]]
     ):
         """
@@ -409,14 +445,14 @@ class AgentCallLogger:
     
     async def get_logs_by_conversation(
         self,
-        conversation_id: str,
+        conversation_id: int,
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """
         Get all agent call logs for a conversation
         
         Args:
-            conversation_id: Conversation identifier
+            conversation_id: Conversation identifier (integer)
             limit: Maximum number of logs to return
             
         Returns:
@@ -448,7 +484,7 @@ class AgentCallLogger:
     async def get_logs_by_agent(
         self,
         agent_name: str,
-        user_id: Optional[str] = None,
+        user_id: Optional[int] = None,
         limit: int = 50
     ) -> List[Dict[str, Any]]:
         """
@@ -456,7 +492,7 @@ class AgentCallLogger:
         
         Args:
             agent_name: Name of the agent
-            user_id: Optional user filter
+            user_id: Optional user filter (integer)
             limit: Maximum number of logs
             
         Returns:

@@ -24,7 +24,8 @@ export async function GET(request: NextRequest) {
 
     // Get projectId from query params if present
     const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get('projectId');
+    const projectIdParam = searchParams.get('projectId');
+    const projectId = projectIdParam ? parseInt(projectIdParam, 10) : undefined;
 
     const tasks = await prisma.task.findMany({
       where: {

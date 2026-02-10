@@ -148,7 +148,7 @@ async def insert_projects_to_db(
 
 
 async def get_project_by_id(
-    project_id: str,
+    project_id: int | str,
     user_id: str = None,
     db_url: str = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
 ) -> Dict[str, Any]:
@@ -156,7 +156,7 @@ async def get_project_by_id(
     Get a single project by ID
     
     Args:
-        project_id: Project ID to retrieve
+        project_id: Project ID to retrieve (int or string that can be converted to int)
         user_id: User ID to verify ownership (optional, recommended for security)
         db_url: PostgreSQL connection string
         
@@ -166,13 +166,19 @@ async def get_project_by_id(
     if not project_id:
         return {"success": False, "error": "project_id is required"}
     
+    # Convert project_id to int if it's a string
+    try:
+        project_id_int = int(project_id)
+    except (ValueError, TypeError):
+        return {"success": False, "error": "Invalid project_id format"}
+    
     try:
         conn = await asyncpg.connect(db_url)
         
         try:
             # Build WHERE clause with optional user_id filter
             where_clauses = ["p.id = $1"]
-            params = [project_id]
+            params = [project_id_int]
             
             if user_id:
                 where_clauses.append('p."userId" = $2')

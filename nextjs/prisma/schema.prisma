@@ -13,7 +13,7 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        Int      @id @default(autoincrement())
   email     String   @unique
   password  String   // Store hashed password (e.g., using bcrypt)
   name      String?
@@ -21,14 +21,16 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
-  tasks     Task[]
-  projects  Project[]
+  tasks         Task[]
+  projects      Project[]
+  conversations Conversation[] @relation("UserConversations")
+  agentLogs     AgentCallLog[] @relation("UserAgentLogs")
 
   @@index([email])
 }
 
 model Project {
-  id          String   @id @default(cuid())
+  id          Int      @id @default(autoincrement())
   name        String
   description String?  @db.Text
   status      ProjectStatus @default(ACTIVE)
@@ -40,7 +42,7 @@ model Project {
   dueDate     DateTime?
   
   // User association
-  userId      String
+  userId      Int
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   // Relations
@@ -71,11 +73,11 @@ model Task {
   completedAt DateTime?
   
   // User association
-  userId      String
+  userId      Int
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   // Project association
-  projectId   String?
+  projectId   Int?
   project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
   
   // Hierarchical structure
@@ -112,7 +114,7 @@ model Task {
 }
 
 model TaskNote {
-  id        String   @id @default(cuid())
+  id        Int      @id @default(autoincrement())
   taskId    Int
   task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   
@@ -127,7 +129,7 @@ model TaskNote {
 }
 
 model TaskDependency {
-  id            String   @id @default(cuid())
+  id            Int      @id @default(autoincrement())
   dependentId   Int
   blockingId    Int
   
@@ -142,11 +144,15 @@ model TaskDependency {
 }
 
 model Conversation {
-  id        String   @id @default(cuid())
-  userId    String
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation("UserConversations", fields: [userId], references: [id], onDelete: Cascade)
   title     String?
   messages  Json     // Array of {role: 'user'|'assistant', content: string, timestamp: DateTime}
   metadata  Json?    // Additional context like referenced tasks, files, etc.
+  
+  // Relations
+  agentLogs AgentCallLog[] @relation("ConversationLogs")
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -155,25 +161,14 @@ model Conversation {
   @@index([createdAt])
 }
 
-model UserContext {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  preferences Json?    // User preferences, settings, theme, etc.
-  workspace   Json?    // Current workspace state, open files, etc.
-  aiSettings  Json?    // AI behavior preferences, model settings, etc.
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  
-}
-
 model AgentCallLog {
-  id                String   @id @default(cuid())
+  id                Int      @id @default(autoincrement())
   
   // Identification
-  userId            String
-  conversationId    String?  // Link to parent conversation
+  userId            Int
+  user              User     @relation("UserAgentLogs", fields: [userId], references: [id], onDelete: Cascade)
+  conversationId    Int?     // Link to parent conversation
+  conversation      Conversation? @relation("ConversationLogs", fields: [conversationId], references: [id], onDelete: SetNull)
   messageId         String   // Unique ID for this user message (can be same across multiple agent calls)
   sessionId         String?  // Optional: broader session identifier
   
@@ -195,6 +190,18 @@ model AgentCallLog {
   toolCalls         Json?    // Array of {name, arguments, timestamp, call_id}
   toolResults       Json?    // Array of {call_id, result, success, error, timestamp}
   toolCallsDetailed Json?    // Complete tool execution details: {tool_call_id, name, input, output, exception, started_at, completed_at, duration_ms, success}
+  
+  // Workflow Context (Plan → Execute → Synthesize → Replan)
+  iterationNumber   Int?     // Which iteration in the workflow (1, 2, 3...)
+  workflowPhase     String?  // "planning" | "executing" | "synthesizing" | "replanning"
+  parentCallId      String?  // Link to parent agent call (for replanning chains)
+  taskId            String?  // Reference to task being executed (from Redis)
+  taskType          String?  // "tool_call" | "agent_call" (if executing a task)
+  
+  // Synthesis Metrics (for SynthesizerAgent calls)
+  completionScore   Float?   // 0-1 indicating goal achievement level
+  synthesisAction   String?  // "publish" | "partial_publish" | "replan"
+  gapsIdentified    Int?     // Number of gaps found during synthesis
   
   // Execution Metrics
   status            AgentCallStatus @default(IN_PROGRESS)
@@ -227,6 +234,9 @@ model AgentCallLog {
   @@index([status])
   @@index([startedAt])
   @@index([sessionId])
+  @@index([iterationNumber])
+  @@index([workflowPhase])
+  @@index([parentCallId])
 }
 
 enum AgentCallStatus {

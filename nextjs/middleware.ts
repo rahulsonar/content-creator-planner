@@ -39,11 +39,11 @@ export function middleware(request: NextRequest) {
   try {
     // Verify token - dynamic import to ensure it works in Node runtime
     const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string; name?: string };
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number; email: string; name?: string };
     
     // Create a new response with the user info in headers
     const response = NextResponse.next();
-    response.headers.set('x-user-id', decoded.userId);
+    response.headers.set('x-user-id', decoded.userId.toString());
     response.headers.set('x-user-email', decoded.email);
     if (decoded.name) {
       response.headers.set('x-user-name', decoded.name);
