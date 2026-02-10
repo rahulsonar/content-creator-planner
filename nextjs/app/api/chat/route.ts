@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     // Extract user info from token for internal API call
     const token = request.cookies.get('auth-token')?.value;
-    let userId = 'anonymous';
+    let userId: number | null = null;
     let userName = null;
     
     if (token) {
@@ -35,10 +35,10 @@ export async function POST(request: NextRequest) {
 
     // If this is the first conversation (no conversationId) and we have a userId,
     // fetch the latest user name from the database to ensure context manager has accurate info
-    if (!conversationId && userId !== 'anonymous') {
+    if (!conversationId && userId !== null) {
       try {
         const user = await prisma.user.findUnique({
-          where: { id: userId },
+          where: { id: userId as number },
           select: { name: true }
         });
         
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-ID': userId,
+        'X-User-ID': userId !== null ? userId.toString() : '',
         'X-User-Name': userName || '',
         'X-Internal-Secret': process.env.INTERNAL_API_SECRET || 'dev-secret-change-in-production',
       },

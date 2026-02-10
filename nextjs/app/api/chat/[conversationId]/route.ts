@@ -9,9 +9,18 @@ export async function GET(
   try {
     const { conversationId } = await params;
 
+    // Convert conversationId to integer (schema uses Int)
+    const conversationIdInt = parseInt(conversationId, 10);
+    if (isNaN(conversationIdInt)) {
+      return NextResponse.json(
+        { error: 'Invalid conversation ID' },
+        { status: 400 }
+      );
+    }
+
     // Extract user info from token
     const token = request.cookies.get('token')?.value || request.cookies.get('auth-token')?.value;
-    let userId = 'anonymous';
+    let userId: number | null = null;
     
     if (token) {
       const decoded = verifyToken(token);
@@ -29,7 +38,7 @@ export async function GET(
 
     // Fetch conversation directly from database
     const conversation = await prisma.conversation.findUnique({
-      where: { id: conversationId },
+      where: { id: conversationIdInt },
     });
 
     if (!conversation) {
@@ -40,8 +49,8 @@ export async function GET(
     }
 
     // Verify user has access to this conversation
-    // Allow access if: user is anonymous OR user owns the conversation
-    if (userId !== 'anonymous' && conversation.userId !== userId) {
+    // Allow access if: user is null (no auth) OR user owns the conversation
+    if (userId !== null && conversation.userId !== userId) {
       return NextResponse.json(
         { error: 'Access denied' },
         { status: 403 }

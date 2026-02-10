@@ -8,15 +8,22 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const userIdHeader = request.headers.get('x-user-id');
 
-    if (!userId) {
+    if (!userIdHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const userId = parseInt(userIdHeader, 10);
+
+    const id = parseInt(params.id, 10);
+    if (isNaN(id)) {
+      return NextResponse.json({ error: 'Invalid project ID' }, { status: 400 });
     }
 
     const project = await prisma.project.findFirst({
       where: {
-        id: params.id,
+        id,
         userId,
       },
       include: {
@@ -53,10 +60,17 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const userIdHeader = request.headers.get('x-user-id');
 
-    if (!userId) {
+    if (!userIdHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const userId = parseInt(userIdHeader, 10);
+
+    const id = parseInt(params.id, 10);
+    if (isNaN(id)) {
+      return NextResponse.json({ error: 'Invalid project ID' }, { status: 400 });
     }
 
     const body = await request.json();
@@ -65,7 +79,7 @@ export async function PATCH(
     // Verify project ownership
     const existingProject = await prisma.project.findFirst({
       where: {
-        id: params.id,
+        id,
         userId,
       },
     });
@@ -79,7 +93,7 @@ export async function PATCH(
         where: {
           userId,
           isDefault: true,
-          id: { not: params.id },
+          id: { not: id },
         },
         data: { isDefault: false },
       });
@@ -87,7 +101,7 @@ export async function PATCH(
 
     const project = await prisma.project.update({
       where: {
-        id: params.id,
+        id,
       },
       data: {
         ...(name !== undefined && { name }),
@@ -123,16 +137,23 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    const userId = request.headers.get('x-user-id');
+    const userIdHeader = request.headers.get('x-user-id');
 
-    if (!userId) {
+    if (!userIdHeader) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const userId = parseInt(userIdHeader, 10);
+
+    const id = parseInt(params.id, 10);
+    if (isNaN(id)) {
+      return NextResponse.json({ error: 'Invalid project ID' }, { status: 400 });
     }
 
     // Verify project ownership
     const existingProject = await prisma.project.findFirst({
       where: {
-        id: params.id,
+        id,
         userId,
       },
     });
@@ -143,7 +164,7 @@ export async function DELETE(
 
     await prisma.project.delete({
       where: {
-        id: params.id,
+        id,
       },
     });
 

@@ -49,7 +49,9 @@ class RedisStorageTool:
                             "type": "string",
                             "description": "Storage key name. Use descriptive keys like 'draft_plan', 'task_list', etc. Will be automatically prefixed with user_id and agent context."
                         },
-                        "value":  ["string", "number", "boolean", "object", "array", "null"],
+                        "value": {
+                            "description": "Data to store. Can be string, number, boolean, object, array, or null (for 'set' operation)."
+                        },
                         "ttl": {
                             "type": "integer",
                             "description": "Time-to-live in seconds (for 'set' operation). Default: 3600 (1 hour). Data will automatically expire after this period."

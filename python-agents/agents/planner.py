@@ -10,7 +10,8 @@ import traceback
 from agents.base import BaseAgent
 from agents.tools import RedisStorageTool
 from config.prompts import (
-    PLANNING_SYSTEM_PROMPT
+    PLANNING_SYSTEM_PROMPT,
+    get_planning_prompt_with_tools
 )
 from utils.logger import logger
 from storage.agent_call_log import agent_call_logger
@@ -19,22 +20,22 @@ from storage.agent_call_log import agent_call_logger
 class PlanningAgent(BaseAgent):
     """Agent for content planning and task generation"""
     
-    def __init__(self, model_client, enable_openai_tools: bool = True, context_manager_agent=None, task_manager_agent=None, conversation_storage=None, redis_client=None):
+    def __init__(self, model_client, enable_openai_tools: bool = True, workflow_mode: bool = False, context_manager_agent=None,  conversation_storage=None, redis_client=None):
         """
         Initialize planning agent with tool support for OpenAI.
         
         Args:
             model_client: LLM client (OpenAI)
             enable_openai_tools: Whether to enable tool usage for OpenAI models (default: True)
+            workflow_mode: If True, only provides planning tools (no execution). Used by WorkflowOrchestrator.
             context_manager_agent: Context manager agent instance for saving user context
-            task_manager_agent: Task manager agent instance for delegating task operations
             conversation_storage: Conversation storage instance for checking conversation history
             redis_client: Redis client for temporary storage of intermediate data
         """
         super().__init__(model_client, "planning")
         self.enable_openai_tools = enable_openai_tools
+        self.workflow_mode = workflow_mode
         self.context_manager_agent = context_manager_agent
-        self.task_manager_agent = task_manager_agent
         self.conversation_storage = conversation_storage
         
         # Initialize Redis storage tool
@@ -46,7 +47,7 @@ class PlanningAgent(BaseAgent):
         self._current_user_name = None
         self._current_conversation_id = None
         self._current_message_id = None
-        self._current_log_id = None  # Track current agent call log
+        self._current_log_id: Optional[int] = None  # Track current agent call log
 
         # Initialize metadata
         self.metadata = {
@@ -77,47 +78,53 @@ class PlanningAgent(BaseAgent):
                 "type": "function",
                 "function": {
                     "name": "manage_user_tasks",
-                    "description": "Delegate task management operations to the UserTaskManager agent. Supports: creating tasks (with initial notes), searching tasks, updating task fields, adding notes to existing tasks, retrieving task details and managing projects. Use 'add notes' for appending notes to tasks. Cannot handle large number of tasks at once; for bulk operations, break into smaller batches or use subtasks. you can use redis_storage to store intermediate task lists or data if needed.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "request": {
-                                "type": "string",
-                                "description": "Natural language request describing the task operation. Examples: 'Create 5 tasks for video production', 'Search for tasks about editing', 'Update task X status to completed', 'Add a note to task Y saying...', 'Get task Z details'"
-                            }
-                        },
-                        "required": ["request"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "manage_user_context",
-                    "description": "Manage user context: save new information about user goals/preferences, request additional context, retrieve existing context, or list context files.",
+                    "description": "Create, update, list, or delete user tasks. Use this to interact with the task database directly.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["save", "request", "retrieve", "list"],
-                                "description": "Context operation: 'save' (save new info), 'request' (ask for specific info), 'retrieve' (read context file), 'list' (list all files)"
+                                "enum": ["create", "update", "list", "get", "delete"],
+                                "description": "The action to perform: create (add new tasks), update (modify existing task), list (retrieve tasks with filters), get (retrieve single task by ID), delete (remove task)"
                             },
-                            "summary": {
-                                "type": "string",
-                                "description": "Information to save about the user (for 'save' action)"
+                            "tasks": {
+                                "type": "array",
+                                "description": "For 'create' action: Array of tasks to create",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "title": {"type": "string", "description": "Task title (required)"},
+                                        "description": {"type": "string", "description": "Task description"},
+                                        "priority": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "URGENT"], "description": "Task priority"},
+                                        "status": {"type": "string", "enum": ["TODO", "IN_PROGRESS", "REVIEW", "BLOCKED", "COMPLETED", "CANCELLED"], "description": "Task status (default: TODO)"},
+                                        "estimatedHours": {"type": "number", "description": "Estimated hours to complete"},
+                                        "actualHours": {"type": "number", "description": "Actual hours spent"},
+                                        "tags": {"type": "array", "items": {"type": "string"}, "description": "Task tags/labels"},
+                                        "researchNotes": {"type": "string", "description": "Research notes"},
+                                        "aiReasoning": {"type": "string", "description": "AI reasoning for this task"},
+                                        "dependencies": {"type": "array", "items": {"type": "integer"}, "description": "Task IDs this task depends on"},
+                                        "projectId": {"type": "integer", "description": "Project ID to associate task with"}
+                                    },
+                                    "required": ["title"]
+                                }
                             },
-                            "query": {
-                                "type": "string",
-                                "description": "Specific question about ADDITIONAL information not in cached context (for 'request' action)"
+                            "task_id": {
+                                "type": "integer",
+                                "description": "For 'update', 'get', or 'delete' actions: The ID of the task"
                             },
-                            "reasoning": {
-                                "type": "string",
-                                "description": "Why additional context is needed (for 'request' action)"
+                            "updates": {
+                                "type": "object",
+                                "description": "For 'update' action: Fields to update",
+                                "additionalProperties": True
                             },
-                            "filename": {
-                                "type": "string",
-                                "description": "Filename to retrieve (e.g., 'INDEX.md', 'profile.md', 'goals.md') - for 'retrieve' action. Optional."
+                            "filters": {
+                                "type": "object",
+                                "description": "For 'list' action: Filter criteria (status, priority, projectId, etc.)",
+                                "additionalProperties": True
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "For 'list' action: Maximum number of tasks to return (default: 50)"
                             }
                         },
                         "required": ["action"]
@@ -181,16 +188,30 @@ class PlanningAgent(BaseAgent):
         """
         Get list of available tools, including dynamically added tools like redis_storage.
         
+        In workflow_mode, only redis_storage tool is provided.
+        Execution tools (manage_user_tasks, delegate_to_agents) are filtered out.
+        
         Returns:
             List of tool definitions in OpenAI format
         """
-        tools = self.tools_openai.copy()
-        
-        # Add redis_storage tool if available
-        if self.redis_tool and self.redis_tool.is_available():
-            tools.append(self.redis_tool.get_tool_definition())
-        
-        return tools
+        if self.workflow_mode:
+            # Workflow mode: Only provide redis_storage tool
+            tools = []
+            
+            # Add redis_storage tool if available (for intermediate data)
+            if self.redis_tool and self.redis_tool.is_available():
+                tools.append(self.redis_tool.get_tool_definition())
+            
+            return tools
+        else:
+            # Normal mode: All tools available
+            tools = self.tools_openai.copy()
+            
+            # Add redis_storage tool if available
+            if self.redis_tool and self.redis_tool.is_available():
+                tools.append(self.redis_tool.get_tool_definition())
+            
+            return tools
 
     def update_metadata(self, **kwargs):
         """Update metadata fields and track last activity, also sync with model client"""
@@ -230,7 +251,28 @@ class PlanningAgent(BaseAgent):
             greeting = f"You are talking to {user_name}."
             self.add_to_history("system", greeting)
         
-        self.add_to_history("system", PLANNING_SYSTEM_PROMPT)
+        # Choose prompt based on workflow mode
+        if self.workflow_mode:
+            # Workflow orchestrator mode - return structured JSON plans with full tool definitions
+            planning_prompt = get_planning_prompt_with_tools()
+            self.add_to_history("system", planning_prompt)
+            self.add_to_history("system", """
+**WORKFLOW MODE**: You are in planning-only mode. You CANNOT execute tasks directly.
+
+Your response MUST be pure JSON (no markdown code blocks):
+1. Direct answer: {"response_type": "direct_answer", "direct_response": "..."}
+2. Task plan: {"response_type": "task_plan", "tasks": [...], "dependency_graph": {...}}
+
+IMPORTANT DISTINCTIONS:
+- **Agent tasks** (in your plans): Saved in Redis, executed by TaskExecutor. Reference the tools above.
+- **User tasks** (via manage_tasks tool): User's actual content projects, saved in database via API.
+
+You CANNOT execute agent tasks. Only create task plans that will be executed by the orchestrator.
+Return raw JSON only - no code blocks, no markdown wrapping.
+""")
+        else:
+            # Normal mode - using OpenAI function calling with all tools
+            self.add_to_history("system", PLANNING_SYSTEM_PROMPT)
        
         
     
@@ -626,13 +668,13 @@ class PlanningAgent(BaseAgent):
     # PRIVATE METHODS - Conversation Checks
     # ============================================================================
     
-    async def _is_first_conversation(self, user_id: str, current_conversation_id: str) -> bool:
+    async def _is_first_conversation(self, user_id: str, current_conversation_id: int) -> bool:
         """
         Check if this is the user's first conversation (excluding the current one).
         
         Args:
             user_id: User identifier
-            current_conversation_id: Current conversation ID to exclude from count
+            current_conversation_id: Current conversation ID (integer) to exclude from count
             
         Returns:
             True if this is the user's first conversation
@@ -661,12 +703,12 @@ class PlanningAgent(BaseAgent):
             logger.error(f"Error checking if first conversation: {e}")
             return True  # Default to first conversation on error
     
-    async def _is_first_user_message_in_conversation(self, conversation_id: str) -> bool:
+    async def _is_first_user_message_in_conversation(self, conversation_id: int) -> bool:
         """
         Check if this is the first user message in the current conversation.
         
         Args:
-            conversation_id: Current conversation ID
+            conversation_id: Current conversation ID (integer)
             
         Returns:
             True if this is the first user message in this conversation
@@ -898,93 +940,23 @@ This context was automatically retrieved from the user's history and is availabl
             if tool_name == "manage_user_tasks":
                 try:
                     user_id = getattr(self, '_current_user_id', None)
-                    conversation_id = getattr(self, '_current_conversation_id', None)
                     if not user_id:
                         raise ValueError("No user_id available for task management")
                     
-                    if not self.task_manager_agent:
-                        raise ValueError("Task manager agent not available")
+                    action = tool_input.get('action')
+                    if not action:
+                        raise ValueError("No action specified for task management")
                     
-                    # Extract natural language request
-                    request = tool_input.get('request', '')
-                    if not request:
-                        raise ValueError("No request provided for task management")
+                    # Execute task management action
+                    task_result = await self._manage_tasks_tool(action, tool_input, user_id)
+                    tool_result = task_result
+                    results.append(task_result)
                     
-                    # Delegate to task manager agent with natural language request
-                    logger.info(f"[PLANNER] Delegating to task manager: {request[:100]}...")
-                    user_context = {
-                        'user_id': user_id,
-                        'conversation_id': conversation_id,
-                        'message_id': self._current_message_id  # Pass message_id for tracking
-                    }
-                    # Delegate to task manager with a timeout to avoid hanging
-                    # Increased timeout for complex operations like closing duplicate tasks
-                    timeout_seconds = 600
-                    logger.info(f"[PLANNER] Starting task manager delegation (timeout: {timeout_seconds}s)...")
-                    start_time = datetime.now(timezone.utc)
+                    # Track tasks created (if action is create)
+                    if action == "create":
+                        tasks_count = len(tool_input.get('tasks', []))
+                        self.metadata["tasks_created"] += tasks_count
                     
-                    try:
-                        task_result = await asyncio.wait_for(
-                            self.task_manager_agent.process_message(
-                                user_message=request,
-                                user_context=user_context
-                            ),
-                            timeout=timeout_seconds
-                        )
-                        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-                        logger.info(f"[PLANNER] Task manager completed successfully in {elapsed:.2f}s")
-                        
-                        # Parse JSON response from task manager
-                        try:
-                            task_response = json.loads(task_result) if isinstance(task_result, str) else task_result
-                            # Extract message and status for LLM context
-                            message = task_response.get('message', str(task_result))
-                            status = task_response.get('status', 'unknown')
-                            # Build human-readable summary for LLM
-                            task_result_str = f"[Task Manager - {status.upper()}] {message}"
-                            if task_response.get('error'):
-                                task_result_str += f"\nError: {task_response['error']}"
-                            if task_response.get('data'):
-                                # Include relevant data counts for LLM context
-                                data = task_response['data']
-                                if 'created_count' in data:
-                                    task_result_str += f"\nCreated {data['created_count']} items"
-                                if 'updated_count' in data:
-                                    task_result_str += f"\nUpdated {data['updated_count']} items"
-                                if 'total_count' in data:
-                                    task_result_str += f"\nFound {data['total_count']} items"
-                            logger.info(f"[PLANNER] Task manager response parsed: {task_result_str}")
-                            results.append(task_result_str)
-                        except (json.JSONDecodeError, TypeError) as parse_error:
-                            logger.warning(f"[PLANNER] Failed to parse task manager JSON response: {parse_error}, using raw response")
-                            tool_result = str(task_result)
-                            results.append(tool_result)
-                        
-                    except asyncio.TimeoutError:
-                        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-                        # Record a timeout and return a helpful message
-                        self.metadata.setdefault('task_manager_timeouts', 0)
-                        self.metadata['task_manager_timeouts'] += 1
-                        logger.error(f"[PLANNER] Task manager timed out after {elapsed:.2f}s (limit: {timeout_seconds}s)")
-                        logger.error(f"[PLANNER] WARNING: Task manager agent may still be running. Check agent_call_log table for orphaned IN_PROGRESS records.")
-                        task_result = (
-                            f"TOOL TIMEOUT: The task management operation did not complete within {timeout_seconds} seconds ({elapsed:.0f}s elapsed). "
-                            f"The task manager may still be processing your request in the background. "
-                            f"\n\nSuggested actions:\n"
-                            f"- Wait a few minutes and check if tasks were updated\n"
-                            f"- Break your request into smaller, more specific operations\n"
-                            f"- For bulk operations, process tasks in batches of 5-10 at a time"
-                        )
-                        tool_exception = f"TimeoutError: Task manager timed out after {elapsed:.0f}s"
-                        tool_result = task_result
-                        results.append(task_result)
-                    except Exception as e:
-                        elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
-                        logger.error(f"[PLANNER] Exception delegating to task manager after {elapsed:.2f}s: {e}", exc_info=True)
-                        task_result = f"TOOL ERROR: Failed to execute task management: {str(e)}"
-                        tool_exception = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-                        tool_result = task_result
-                        results.append(task_result)
                 except Exception as e:
                     logger.error(f"Error executing manage_user_tasks tool: {e}")
                     error_msg = f"Error managing tasks: {str(e)}"
@@ -1129,6 +1101,159 @@ This context was automatically retrieved from the user's history and is availabl
             logger.error(f"Error managing context: {e}")
             return f"Error managing context: {str(e)}"
     
+    async def _manage_tasks_tool(self, action: str, tool_input: Dict[str, Any], user_id: str) -> str:
+        """
+        Handler for manage_user_tasks tool. Directly calls task utilities for database operations.
+        
+        Args:
+            action: Action to perform (create, update, list, get, delete)
+            tool_input: Tool parameters
+            user_id: User ID for task association
+            
+        Returns:
+            JSON string with operation results
+        """
+        import json
+        from utils.task_inserter import insert_tasks_to_db
+        from utils.task_updater import update_task_by_id
+        
+        try:
+            if action == "create":
+                # Create new tasks
+                tasks = tool_input.get('tasks', [])
+                if not tasks:
+                    return json.dumps({"success": False, "error": "No tasks provided"})
+                
+                result = await insert_tasks_to_db(tasks, user_id=user_id)
+                logger.info(f"Created {len(result.get('created_ids', []))} tasks for user {user_id}")
+                return json.dumps(result)
+                
+            elif action == "update":
+                # Update existing task
+                task_id = tool_input.get('task_id')
+                updates = tool_input.get('updates', {})
+                
+                if not task_id:
+                    return json.dumps({"success": False, "error": "task_id is required"})
+                if not updates:
+                    return json.dumps({"success": False, "error": "No updates provided"})
+                
+                success = await update_task_by_id(task_id, updates, user_id=user_id)
+                return json.dumps({"success": success, "task_id": task_id, "updated": success})
+                
+            elif action == "list":
+                # List tasks with filters
+                import asyncpg
+                conn = None
+                try:
+                    db_url = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
+                    conn = await asyncpg.connect(db_url)
+                    
+                    filters = tool_input.get('filters', {})
+                    limit = tool_input.get('limit', 50)
+                    
+                    # Build query
+                    where_clauses = []
+                    params = []
+                    param_count = 1
+                    
+                    for key, value in filters.items():
+                        if key in ['status', 'priority']:
+                            where_clauses.append(f'"{key}" = ${param_count}')
+                            params.append(value)
+                            param_count += 1
+                        elif key == 'projectId':
+                            where_clauses.append(f'"projectId" = ${param_count}')
+                            params.append(value)
+                            param_count += 1
+                    
+                    where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+                    query = f'''
+                        SELECT id, title, description, status, priority, "estimatedHours", "actualHours",
+                               tags, "researchNotes", "aiReasoning", "createdAt", "updatedAt", 
+                               "completedAt", "projectId", "parentId"
+                        FROM "Task"
+                        WHERE {where_sql}
+                        ORDER BY "createdAt" DESC
+                        LIMIT ${param_count}
+                    '''
+                    params.append(limit)
+                    
+                    rows = await conn.fetch(query, *params)
+                    tasks = [dict(row) for row in rows]
+                    
+                    # Convert datetime objects to ISO strings
+                    for task in tasks:
+                        for key in ['createdAt', 'updatedAt', 'completedAt']:
+                            if task.get(key):
+                                task[key] = task[key].isoformat()
+                    
+                    return json.dumps({"success": True, "tasks": tasks, "count": len(tasks)})
+                finally:
+                    if conn:
+                        await conn.close()
+                        
+            elif action == "get":
+                # Get single task by ID
+                import asyncpg
+                conn = None
+                try:
+                    task_id = tool_input.get('task_id')
+                    if not task_id:
+                        return json.dumps({"success": False, "error": "task_id is required"})
+                    
+                    db_url = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
+                    conn = await asyncpg.connect(db_url)
+                    
+                    query = '''
+                        SELECT id, title, description, status, priority, "estimatedHours", "actualHours",
+                               tags, "researchNotes", "aiReasoning", "createdAt", "updatedAt", 
+                               "completedAt", "projectId", "parentId"
+                        FROM "Task"
+                        WHERE id = $1
+                    '''
+                    row = await conn.fetchrow(query, task_id)
+                    
+                    if not row:
+                        return json.dumps({"success": False, "error": "Task not found"})
+                    
+                    task = dict(row)
+                    # Convert datetime objects to ISO strings
+                    for key in ['createdAt', 'updatedAt', 'completedAt']:
+                        if task.get(key):
+                            task[key] = task[key].isoformat()
+                    
+                    return json.dumps({"success": True, "task": task})
+                finally:
+                    if conn:
+                        await conn.close()
+                        
+            elif action == "delete":
+                # Delete task
+                import asyncpg
+                conn = None
+                try:
+                    task_id = tool_input.get('task_id')
+                    if not task_id:
+                        return json.dumps({"success": False, "error": "task_id is required"})
+                    
+                    db_url = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
+                    conn = await asyncpg.connect(db_url)
+                    
+                    result = await conn.execute('DELETE FROM "Task" WHERE id = $1', task_id)
+                    success = result == "DELETE 1"
+                    
+                    return json.dumps({"success": success, "task_id": task_id, "deleted": success})
+                finally:
+                    if conn:
+                        await conn.close()
+            else:
+                return json.dumps({"success": False, "error": f"Unknown action: {action}"})
+                
+        except Exception as e:
+            logger.error(f"Error in _manage_tasks_tool: {e}", exc_info=True)
+            return json.dumps({"success": False, "error": str(e)})
+    
     # ============================================================================
     # PRIVATE METHODS - Task Search
     # ============================================================================
@@ -1144,7 +1269,7 @@ This context was automatically retrieved from the user's history and is availabl
         self, 
         tool_input: Dict[str, Any], 
         user_id: str,
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[int] = None
     ) -> str:
         """
         Break a task into subtasks and delegate to executor agents.
@@ -1152,7 +1277,7 @@ This context was automatically retrieved from the user's history and is availabl
         Args:
             tool_input: Dict with 'parent_task_description', 'subtasks', and optional 'wait_for_completion'
             user_id: User identifier
-            conversation_id: Optional conversation identifier
+            conversation_id: Optional conversation identifier (integer)
             
         Returns:
             Result summary of subtask execution
@@ -1216,7 +1341,6 @@ This context was automatically retrieved from the user's history and is availabl
                 executor = ExecutorAgent(
                     model_client=executor_model,
                     redis_client=self.redis_tool.redis_client if self.redis_tool else None,
-                    task_manager_agent=self.task_manager_agent,
                     executor_id=f"executor_{subtask_id}_{datetime.now(timezone.utc).timestamp()}"
                 )
                 

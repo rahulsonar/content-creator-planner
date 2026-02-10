@@ -3,46 +3,46 @@ User Context Manager Utility
 Bare file operations for user-specific context files in agent_context/{userId} directories
 """
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Union
 
 
 # Base directory for user context storage
 USER_CONTEXT_DIR = Path(__file__).parent.parent / "agent_context"
 
 
-def ensure_user_context_dir(user_id: Optional[str] = None):
+def ensure_user_context_dir(user_id: Optional[Union[str, int]] = None):
     """
     Ensure the agent_context directory exists, optionally for a specific user
     
     Args:
-        user_id: Optional user ID to create user-specific directory
+        user_id: Optional user ID to create user-specific directory (int or str)
     """
     if user_id:
-        (USER_CONTEXT_DIR / user_id).mkdir(parents=True, exist_ok=True)
+        (USER_CONTEXT_DIR / str(user_id)).mkdir(parents=True, exist_ok=True)
     else:
         USER_CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_user_context_path(user_id: str, filename: str) -> Path:
+def get_user_context_path(user_id: Union[str, int], filename: str) -> Path:
     """
     Get the full path for a context file in user's directory
     
     Args:
-        user_id: User identifier
+        user_id: User identifier (int or str)
         filename: Name of the file
         
     Returns:
         Full path to the file in agent_context/{user_id}/
     """
-    return USER_CONTEXT_DIR / user_id / filename
+    return USER_CONTEXT_DIR / str(user_id) / filename
 
 
-def read_user_context(user_id: str, filename: str) -> Optional[str]:
+def read_user_context(user_id: Union[str, int], filename: str) -> Optional[str]:
     """
     Read content from a file in agent_context/{user_id} directory
     
     Args:
-        user_id: User identifier
+        user_id: User identifier (int or str)
         filename: Name of the file to read
         
     Returns:
@@ -61,12 +61,12 @@ def read_user_context(user_id: str, filename: str) -> Optional[str]:
         return f.read()
 
 
-def write_user_context(user_id: str, filename: str, content: str) -> bool:
+def write_user_context(user_id: Union[str, int], filename: str, content: str) -> bool:
     """
     Write content to a file in agent_context/{user_id} directory
     
     Args:
-        user_id: User identifier
+        user_id: User identifier (int or str)
         filename: Name of the file to write
         content: Content to write to the file
         
@@ -85,12 +85,12 @@ def write_user_context(user_id: str, filename: str, content: str) -> bool:
     return True
 
 
-def update_user_context(user_id: str, filename: str, content: str) -> bool:
+def update_user_context(user_id: Union[str, int], filename: str, content: str) -> bool:
     """
     Update (append) content to an existing file in agent_context/{user_id} directory
     
     Args:
-        user_id: User identifier
+        user_id: User identifier (int or str)
         filename: Name of the file to update
         content: Content to append to the file
         
@@ -109,12 +109,12 @@ def update_user_context(user_id: str, filename: str, content: str) -> bool:
     return True
 
 
-def delete_user_context(user_id: str, filename: str) -> bool:
+def delete_user_context(user_id: Union[str, int], filename: str) -> bool:
     """
     Delete a file from agent_context/{user_id} directory
     
     Args:
-        user_id: User identifier
+        user_id: User identifier (int or str)
         filename: Name of the file to delete
         
     Returns:
@@ -133,12 +133,12 @@ def delete_user_context(user_id: str, filename: str) -> bool:
     return True
 
 
-def list_user_context_files(user_id: str) -> List[str]:
+def list_user_context_files(user_id: Union[str, int]) -> List[str]:
     """
     List all files in the agent_context/{user_id} directory
     
     Args:
-        user_id: User identifier
+        user_id: User identifier (int or str)
         
     Returns:
         List of filenames
@@ -147,5 +147,5 @@ def list_user_context_files(user_id: str) -> List[str]:
         files = list_user_context_files("user123")
     """
     ensure_user_context_dir(user_id)
-    user_dir = USER_CONTEXT_DIR / user_id
+    user_dir = USER_CONTEXT_DIR / str(user_id)
     return [f.name for f in user_dir.iterdir() if f.is_file()]

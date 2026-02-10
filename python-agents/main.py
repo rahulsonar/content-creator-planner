@@ -15,6 +15,19 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Content Creator Agent Service")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
+    
+    # Clean up orphaned agent logs from previous runs
+    try:
+        from utils.cleanup_orphaned_agents import orphaned_cleaner
+        logger.info("Cleaning up orphaned agent logs from previous runs...")
+        cleaned_count = await orphaned_cleaner.cleanup_orphaned_logs(hours_threshold=1)
+        if cleaned_count > 0:
+            logger.info(f"Cleaned up {cleaned_count} orphaned agent logs")
+        else:
+            logger.info("No orphaned agent logs found")
+    except Exception as e:
+        logger.error(f"Failed to clean up orphaned agent logs on startup: {e}")
+    
     yield
     # Shutdown
     logger.info("Shutting down Content Creator Agent Service")

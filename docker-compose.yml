@@ -83,8 +83,9 @@ services:
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-default-internal-secret-change-me}
       - ENABLE_OPENAI_TOOLS=${ENABLE_OPENAI_TOOLS:-true}
       - USE_DUMMY_AI=${USE_DUMMY_AI:-false}
+      - USE_WORKFLOW_ORCHESTRATOR=${USE_WORKFLOW_ORCHESTRATOR:-false}
+      - MAX_WORKFLOW_ITERATIONS=${MAX_WORKFLOW_ITERATIONS:-3}
       - PLANNER_MODEL=${PLANNER_MODEL:-gpt-4}
-      - TASK_MANAGER_MODEL=${TASK_MANAGER_MODEL:-gpt-4}
       - CONTEXT_MANAGER_MODEL=${CONTEXT_MANAGER_MODEL:-gpt-4}
 
     volumes:
@@ -95,8 +96,21 @@ services:
       redis:
         condition: service_healthy
 
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: content-planner-redis-insight
+    restart: unless-stopped
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
+  redisinsight:
   node_modules:
   next_cache:

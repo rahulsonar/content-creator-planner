@@ -13,19 +13,19 @@ class PlanningResponse(BaseModel):
     model: str
     totalTasks: int
     estimatedHours: Optional[float] = None
-    conversationId: Optional[str] = None
+    conversationId: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
     """General chat response"""
     message: str
     model: str
-    conversationId: Optional[str] = None
+    conversationId: Optional[int] = None
 
 
 class ConversationResponse(BaseModel):
     """Conversation record"""
-    id: str
+    id: int
     type: str
     status: str
     createdAt: datetime
@@ -69,7 +69,7 @@ class HealthResponse(BaseModel):
 
 
 class TaskManagerResponse(BaseModel):
-    """Task Manager agent response with structured result"""
+    """[DEPRECATED] Task Manager agent response - TaskManager has been removed"""
     status: str  # "success", "error", "partial"
     action: Optional[str] = None  # "create", "search", "update", "get_one", "add_notes"
     message: str  # Human-readable summary

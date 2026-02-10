@@ -24,13 +24,14 @@ export async function GET(request: Request) {
       take: limit,
     });
 
-    // Group by messageId
+    // Group by base messageId (remove task suffix like _task_13)
     const groupedLogs = logs.reduce((acc: any, log) => {
-      const msgId = log.messageId;
-      if (!acc[msgId]) {
-        acc[msgId] = [];
+      // Extract base message ID (e.g., msg_91854b404628425d from msg_91854b404628425d_task_13)
+      const baseMessageId = log.messageId.split('_task_')[0];
+      if (!acc[baseMessageId]) {
+        acc[baseMessageId] = [];
       }
-      acc[msgId].push(log);
+      acc[baseMessageId].push(log);
       return acc;
     }, {});
 

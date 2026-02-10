@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react';
 
 interface AgentCallLog {
-  id: string;
-  userId: string;
+  id: number;
+  userId: number;
   conversationId: string | null;
   messageId: string;
   sessionId: string | null;
@@ -234,10 +234,17 @@ export default function AgentLogsPage() {
 
                 {expandedMessages.has(messageId) && (
                   <div className="p-4 space-y-3">
-                    {logs.map((log) => (
+                    {logs
+                      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+                      .map((log) => {
+                        // Check if this is a subtask log
+                        const isSubtask = log.messageId.includes('_task_');
+                        const taskId = isSubtask ? log.messageId.split('_task_')[1] : null;
+                        
+                        return (
                       <div
                         key={log.id}
-                        className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+                        className={`border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden ${isSubtask ? 'ml-6' : ''}`}
                       >
                         <div
                           className="p-3 bg-gray-50 dark:bg-gray-700/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
@@ -245,6 +252,11 @@ export default function AgentLogsPage() {
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
+                              {isSubtask && (
+                                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                                  ↳ {taskId}
+                                </span>
+                              )}
                               <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(log.status)}`}>
                                 {log.status}
                               </span>
@@ -428,7 +440,7 @@ export default function AgentLogsPage() {
                           </div>
                         )}
                       </div>
-                    ))}
+                    )})}
                   </div>
                 )}
               </div>

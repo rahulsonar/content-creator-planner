@@ -141,7 +141,7 @@ class AnthropicClient:
             params = {
                 "model": self.model,
                 "messages": anthropic_messages,
-                "max_tokens": kwargs.pop("max_tokens", 4096),
+                "max_completion_tokens": kwargs.pop("max_completion_tokens", 4096),
                 **kwargs
             }
             
@@ -200,7 +200,7 @@ class AnthropicClient:
             params = {
                 "model": self.model,
                 "messages": anthropic_messages,
-                "max_tokens": kwargs.pop("max_tokens", 4096),
+                "max_completion_tokens": kwargs.pop("max_completion_tokens", 4096),
                 "stream": True,
                 **kwargs
             }

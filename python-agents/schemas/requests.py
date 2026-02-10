@@ -10,14 +10,14 @@ from typing import Optional, List, Dict, Any
 class PlanningRequest(BaseModel):
     """Request to generate project plan"""
     projectDescription: str = Field(..., min_length=10, max_length=5000)
-    conversationId: Optional[str] = None
+    conversationId: Optional[int] = None
     userContext: Optional[Dict[str, Any]] = None
 
 
 class ChatRequest(BaseModel):
     """General chat request"""
     message: str = Field(..., min_length=1, max_length=5000)
-    conversationId: Optional[str] = None
+    conversationId: Optional[int] = None
     context: Optional[Dict[str, Any]] = None
 
 

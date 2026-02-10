@@ -43,9 +43,12 @@ class Settings(BaseSettings):
     ENABLE_OPENAI_TOOLS: bool = True
     USE_DUMMY_AI: bool = False  # When True, returns dummy responses without AI API calls
     
+    # Workflow Orchestrator Configuration
+    USE_WORKFLOW_ORCHESTRATOR: bool = False  # When True, uses Plan→Execute→Synthesize→Replan pattern
+    MAX_WORKFLOW_ITERATIONS: int = 3  # Maximum iterations before forcing completion
+    
     # Agent Model Configuration
     PLANNER_MODEL: str = "gpt-4"
-    TASK_MANAGER_MODEL: str = "gpt-4"
     CONTEXT_MANAGER_MODEL: str = "gpt-4"
     
     # WebSocket Webhook

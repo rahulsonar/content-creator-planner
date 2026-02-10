@@ -19,27 +19,27 @@ class ConversationStorage:
     
     async def create_conversation(
         self,
-        user_id: str,
+        user_id: int,
         conversation_type: str = "chat",
         title: Optional[str] = None
-    ) -> str:
+    ) -> int:
         """
         Create new conversation record
         
         Args:
-            user_id: User identifier
+            user_id: User identifier (integer)
             conversation_type: Type (onboarding, planning, chat)
             title: Optional conversation title
             
         Returns:
-            Conversation ID
+            Conversation ID (integer)
         """
         try:
             async with self.db.get_session() as session:
-                # Insert conversation into database
+                # Insert conversation into database (id auto-generated)
                 query = text("""
-                    INSERT INTO "Conversation" ("id", "userId", "title", "messages", "metadata", "createdAt", "updatedAt")
-                    VALUES (gen_random_uuid()::text, :userId, :title, :messages, :metadata, NOW(), NOW())
+                    INSERT INTO "Conversation" ("userId", "title", "messages", "metadata", "createdAt", "updatedAt")
+                    VALUES (:userId, :title, :messages, :metadata, NOW(), NOW())
                     RETURNING id
                 """)
                 
@@ -63,7 +63,7 @@ class ConversationStorage:
     
     async def save_message(
         self,
-        conversation_id: str,
+        conversation_id: int,
         role: str,
         content: str,
         model: Optional[str] = None,
@@ -73,7 +73,7 @@ class ConversationStorage:
         Save message to conversation
         
         Args:
-            conversation_id: Conversation identifier
+            conversation_id: Conversation identifier (integer)
             role: Message role (user/assistant/system)
             content: Message content
             model: Model used (if assistant)
@@ -122,13 +122,13 @@ class ConversationStorage:
     
     async def get_conversation(
         self,
-        conversation_id: str
+        conversation_id: int
     ) -> Optional[Dict[str, Any]]:
         """
         Retrieve conversation by ID
         
         Args:
-            conversation_id: Conversation identifier
+            conversation_id: Conversation identifier (integer)
             
         Returns:
             Conversation data or None
@@ -178,7 +178,7 @@ class ConversationStorage:
     
     async def get_user_conversations(
         self,
-        user_id: str,
+        user_id: int,
         conversation_type: Optional[str] = None,
         limit: int = 10
     ) -> List[Dict[str, Any]]:
@@ -186,7 +186,7 @@ class ConversationStorage:
         Get user's conversation history
         
         Args:
-            user_id: User identifier
+            user_id: User identifier (integer)
             conversation_type: Filter by type (optional)
             limit: Maximum results
             
@@ -238,14 +238,14 @@ class ConversationStorage:
     
     async def update_conversation_status(
         self,
-        conversation_id: str,
+        conversation_id: int,
         status: str
     ):
         """
         Update conversation status
         
         Args:
-            conversation_id: Conversation identifier
+            conversation_id: Conversation identifier (integer)
             status: New status (active, completed, abandoned)
         """
         try:
@@ -275,15 +275,15 @@ class ConversationStorage:
     
     async def update_conversation_user(
         self,
-        conversation_id: str,
-        user_id: str
+        conversation_id: int,
+        user_id: int
     ):
         """
         Update conversation userId (e.g., claim an anonymous conversation)
         
         Args:
-            conversation_id: Conversation identifier
-            user_id: New user ID to assign
+            conversation_id: Conversation identifier (integer)
+            user_id: New user ID to assign (integer)
         """
         try:
             async with self.db.get_session() as session:
@@ -310,13 +310,13 @@ class ConversationStorage:
     
     async def calculate_cost(
         self,
-        conversation_id: str
+        conversation_id: int
     ) -> float:
         """
         Calculate total cost for conversation
         
         Args:
-            conversation_id: Conversation identifier
+            conversation_id: Conversation identifier (integer)
             
         Returns:
             Estimated cost in USD

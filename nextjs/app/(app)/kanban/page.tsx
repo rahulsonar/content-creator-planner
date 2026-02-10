@@ -191,7 +191,7 @@ function TaskModal({
     description: task.description || '',
     status: task.status || 'TODO',
     priority: task.priority || 'MEDIUM',
-    projectId: task.project?.id || '',
+    projectId: task.project?.id ? String(task.project.id) : '',
     startDate: '',
     endDate: '',
     dueDate: '',
@@ -305,7 +305,7 @@ function TaskModal({
                     description: editFormData.description || null,
                     status: editFormData.status as TaskStatus,
                     priority: editFormData.priority as Priority,
-                    project: editFormData.projectId ? { id: editFormData.projectId, name: '', color: null } : null,
+                    project: editFormData.projectId ? { id: parseInt(editFormData.projectId, 10), name: '', color: null } : null,
                     startDate: editFormData.startDate || null,
                     endDate: editFormData.endDate || null,
                     dueDate: editFormData.dueDate || null,
@@ -839,7 +839,8 @@ export default function KanbanPage() {
           
           // Set current project if projectId is in query
           if (projectId) {
-            const project = projectsData.find(p => p.id === projectId);
+            const projectIdNum = parseInt(projectId, 10);
+            const project = projectsData.find(p => p.id === projectIdNum);
             setCurrentProject(project || null);
           } else {
             setCurrentProject(null);
@@ -908,6 +909,7 @@ export default function KanbanPage() {
         },
         body: JSON.stringify({
           ...createFormData,
+          projectId: createFormData.projectId ? parseInt(createFormData.projectId, 10) : null,
           tags: parsedTags,
           dependencies: validDependencies,
         }),

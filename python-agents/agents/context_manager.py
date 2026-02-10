@@ -34,7 +34,8 @@ class ContextManagerAgent(BaseAgent):
         self.current_user_id = None  # Will be set during process_message
         self.current_user_name = None  # Will be set during process_message
         self.db_session = db_session
-        self._current_agent_call_log_id = None  # Track current agent call log
+        # Track current agent call log
+        self._current_agent_call_log_id: Optional[int] = None
         self._tool_calls_log = []  # Track tool calls for logging
         self._tool_results_log = []  # Track tool results for logging
         self._tool_calls_detailed = []  # Track detailed tool execution info
@@ -469,7 +470,7 @@ class ContextManagerAgent(BaseAgent):
                 return "Error: content is required for 'write' action"
             ensure_user_context_dir(user_id)
             from pathlib import Path
-            user_dir = Path(__file__).parent.parent / "agent_context" / user_id
+            user_dir = Path(__file__).parent.parent / "agent_context" / str(user_id)
             file_exists = (user_dir / filename).exists()
             success = write_user_context(user_id, filename, content)
             if success:
