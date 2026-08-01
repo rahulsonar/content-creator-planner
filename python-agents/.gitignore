@@ -45,5 +45,8 @@ htmlcov/
 # User context files (optional, depending on backup strategy)
 agent_context/
 
+# Agent call log files (mirrors AgentCallLog table, see storage/agent_call_log.py)
+agent_call_logs/
+
 # Logs
 *.log

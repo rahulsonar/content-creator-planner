@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     
     # Context Storage
     CONTEXT_STORAGE_PATH: str = "/app/agent_context"
+
+    # Agent Call Log Storage (file-based, mirrors AgentCallLog table)
+    AGENT_CALL_LOG_PATH: str = "/app/agent_call_logs"
     
     # Agent Configuration
     ENABLE_OPENAI_TOOLS: bool = True

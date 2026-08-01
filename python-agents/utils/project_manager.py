@@ -95,15 +95,15 @@ async def insert_projects_to_db(
                         user_id
                     )
                 
-                # Insert project
+                # Insert project (id auto-increments, don't specify it)
                 query = """
                     INSERT INTO "Project" (
-                        id, name, description, status,
+                        name, description, status,
                         "userId", color, icon, tags,
                         "startDate", "endDate", "dueDate", "isDefault",
                         "createdAt", "updatedAt"
                     ) VALUES (
-                        gen_random_uuid()::text, $1, $2, $3::"ProjectStatus",
+                        $1, $2, $3::"ProjectStatus",
                         $4, $5, $6, $7,
                         $8, $9, $10, $11,
                         NOW(), NOW()
@@ -215,6 +215,113 @@ async def get_project_by_id(
             
     except Exception as e:
         logger.error(f"Failed to get project {project_id}: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+async def delete_project_by_id(
+    project_id: int | str,
+    user_id: str = None,
+    new_project_id: int | str = None,
+    db_url: str = "postgresql://postgres:postgres@content-planner-db:5432/content_planner"
+) -> Dict[str, Any]:
+    """
+    Delete a project, reassigning its tasks first.
+
+    Tasks belonging to the deleted project are transferred to new_project_id if
+    given, otherwise to the user's default project (isDefault=True) if one exists,
+    otherwise left orphaned (projectId set to NULL).
+
+    Args:
+        project_id: Project ID to delete
+        user_id: User ID to verify ownership (optional, recommended for security)
+        new_project_id: Project ID to transfer tasks to (optional)
+        db_url: PostgreSQL connection string
+
+    Returns:
+        Dict with success status, deletion result, and task transfer counts
+    """
+    try:
+        project_id_int = int(project_id)
+    except (ValueError, TypeError):
+        return {"success": False, "error": "Invalid project_id format"}
+
+    try:
+        conn = await asyncpg.connect(db_url)
+
+        try:
+            async with conn.transaction():
+                where_clauses = ["id = $1"]
+                params = [project_id_int]
+                if user_id:
+                    where_clauses.append('"userId" = $2')
+                    params.append(user_id)
+
+                project_row = await conn.fetchrow(
+                    f'SELECT id, "userId" FROM "Project" WHERE {" AND ".join(where_clauses)}',
+                    *params
+                )
+                if not project_row:
+                    return {"success": False, "error": f"Project {project_id} not found"}
+
+                owner_id = project_row["userId"]
+                target_project_id = None
+
+                if new_project_id is not None:
+                    try:
+                        new_project_id_int = int(new_project_id)
+                    except (ValueError, TypeError):
+                        return {"success": False, "error": "Invalid new_project_id format"}
+
+                    if new_project_id_int == project_id_int:
+                        return {"success": False, "error": "new_project_id cannot be the same as project_id"}
+
+                    target_row = await conn.fetchrow(
+                        'SELECT id FROM "Project" WHERE id = $1 AND "userId" = $2',
+                        new_project_id_int, owner_id
+                    )
+                    if not target_row:
+                        return {"success": False, "error": f"new_project_id {new_project_id} not found for this user"}
+
+                    target_project_id = new_project_id_int
+                else:
+                    default_row = await conn.fetchrow(
+                        'SELECT id FROM "Project" WHERE "userId" = $1 AND "isDefault" = TRUE AND id != $2',
+                        owner_id, project_id_int
+                    )
+                    if default_row:
+                        target_project_id = default_row["id"]
+
+                affected_count = await conn.fetchval(
+                    'SELECT COUNT(*) FROM "Task" WHERE "projectId" = $1', project_id_int
+                )
+
+                await conn.execute(
+                    'UPDATE "Task" SET "projectId" = $1, "updatedAt" = NOW() WHERE "projectId" = $2',
+                    target_project_id, project_id_int
+                )
+
+                await conn.execute('DELETE FROM "Project" WHERE id = $1', project_id_int)
+
+            logger.info(
+                f"Deleted project {project_id_int}, "
+                f"{'transferred' if target_project_id else 'orphaned'} {affected_count} task(s)"
+                + (f" to project {target_project_id}" if target_project_id else "")
+            )
+
+            return {
+                "success": True,
+                "project_id": project_id_int,
+                "deleted": True,
+                "target_project_id": target_project_id,
+                "tasks_transferred": affected_count if target_project_id else 0,
+                "tasks_orphaned": affected_count if not target_project_id else 0,
+            }
+
+        finally:
+            await conn.close()
+
+    except Exception as e:
+        logger.error(f"Failed to delete project {project_id}: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 

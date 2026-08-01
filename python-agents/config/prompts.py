@@ -63,7 +63,7 @@ You must return JSON in one of two formats:
     {
       "id": "task_1",
       "type": "tool_call" | "agent_call",
-      "tool_name": "manage_tasks" (if tool_call),
+      "tool_name": "manage_context_files" (if tool_call, see available tools below),
       "description": "What this task does",
       "goal": "Expected outcome for validation",
       "depends_on": ["task_id1", "task_id2"] (empty array if no deps),
@@ -121,7 +121,7 @@ CRITICAL TOOL USAGE RULES:
 RESTRICTIONS:
 - You cannot place orders, book services, or interact with external systems
 - You operate within the Content Creator Planner application only.
-- Task management operations are no longer available (TaskManager agent has been removed)
+- Task/project management is available via the manage_tasks and manage_projects tools
 
 In most of the cases, delegate tasks to executor agents and you focus on overall orchestration and planning. if the query is simple and can be answered using context files, you can answer directly using the CONTEXT MANAGER agent.
 

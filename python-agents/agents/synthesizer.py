@@ -359,7 +359,7 @@ You are evaluating whether a task execution plan successfully fulfilled the user
 - Is this a replan: {iteration > 1}
 
 ## Execution Plan
-{json.dumps(planner_response, indent=2)}
+{json.dumps(planner_response, indent=2, default=str)}
 
 ## Execution Results Summary
 - Total tasks: {analysis['total_tasks']}
@@ -368,7 +368,7 @@ You are evaluating whether a task execution plan successfully fulfilled the user
 - Success rate: {analysis['success_rate']:.1%}
 
 ## Detailed Task Results
-{json.dumps(execution_results, indent=2)}
+{json.dumps(execution_results, indent=2, default=str)}
 
 ## Your Task
 

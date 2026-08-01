@@ -15,7 +15,7 @@ log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
 logger.setLevel(log_level)
 
 # Create console handler
-handler = logging.StreamHandler(sys.stdout)
+handler = logging.StreamHandler(sys.stderr)
 handler.setLevel(log_level)
 
 # Create formatter

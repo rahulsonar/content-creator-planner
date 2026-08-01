@@ -21,6 +21,26 @@ const DEFAULT_MESSAGE: Message = {
   timestamp: new Date(),
 };
 
+function getDisplayTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Kolkata';
+  } catch {
+    return 'Asia/Kolkata';
+  }
+}
+
+function formatMessageTimestamp(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: getDisplayTimeZone(),
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(date);
+}
+
 function ChatContent() {
   const params = useParams();
   const router = useRouter();
@@ -221,7 +241,7 @@ function ChatContent() {
                       <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                     )}
                     <p className={`text-xs mt-2 ${message.role === 'user' ? 'text-blue-100' : 'text-gray-500'}`}>
-                      {mounted ? message.timestamp.toLocaleTimeString() : ''}
+                      {mounted ? formatMessageTimestamp(message.timestamp) : ''}
                       {message.model && message.role === 'assistant' && (
                         <span className="ml-2 opacity-60">• {message.model}</span>
                       )}
