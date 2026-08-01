@@ -96,6 +96,40 @@ services:
       redis:
         condition: service_healthy
 
+  agent-log-cleanup:
+    image: curlimages/curl:8.11.0
+    container_name: content-planner-agent-cleanup
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Kolkata
+      CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-600}
+      CLEANUP_MAX_AGE_MINUTES: ${CLEANUP_MAX_AGE_MINUTES:-30}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          echo "[agent-log-cleanup] $$(date -u +%FT%TZ) running cleanup (max_age_minutes=$$CLEANUP_MAX_AGE_MINUTES)"
+          curl -s -X POST "http://python-agents:8000/api/admin/cleanup-orphaned-agents?max_age_minutes=$$CLEANUP_MAX_AGE_MINUTES" || echo "[agent-log-cleanup] request failed"
+          echo ""
+          sleep "$$CLEANUP_INTERVAL_SECONDS"
+        done
+    depends_on:
+      - python-agents
+
+  adminer:
+    image: adminer:latest
+    container_name: content-planner-adminer
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Kolkata
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   redis-insight:
     image: redis/redisinsight:latest
     container_name: content-planner-redis-insight

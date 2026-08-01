@@ -1,23 +1,56 @@
 """
 Agent Call Log Storage
 Comprehensive logging for all agent interactions
+
+Writes to both the "AgentCallLog" table and a mirrored file under
+AGENT_CALL_LOG_PATH/<conversationId>/<messageId>.log (JSON Lines, one
+event per start/update/complete/fail call) so calls can be traced
+without querying the database.
 """
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
+from pathlib import Path
 import json
 import uuid
 from sqlalchemy import text
 from utils.logger import logger
 from storage.database import db_manager
+from config.settings import settings
 
 
 class AgentCallLogger:
-    """Manages agent call logging to database"""
-    
+    """Manages agent call logging to database and to per-message log files"""
+
     def __init__(self):
         """Initialize agent call logger"""
         self.db = db_manager
-        
+        self.log_dir = Path(settings.AGENT_CALL_LOG_PATH)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        # log_id -> (conversation_id, message_id), so update/complete/fail
+        # calls (which only receive log_id) know which file to append to
+        self._log_locations: Dict[int, tuple] = {}
+
+    def _write_log_event(
+        self,
+        conversation_id: Optional[int],
+        message_id: str,
+        event: Dict[str, Any]
+    ):
+        """Append a JSON-line event to conversationId/messageId.log"""
+        try:
+            conversation_dir = self.log_dir / (str(conversation_id) if conversation_id is not None else "no_conversation")
+            conversation_dir.mkdir(parents=True, exist_ok=True)
+            log_file = conversation_dir / f"{message_id}.log"
+
+            event_with_timestamp = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                **event
+            }
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event_with_timestamp, default=str) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to write agent call log file for message {message_id}: {str(e)}")
+
     def generate_message_id(self) -> str:
         """
         Generate unique message ID for tracking a user message
@@ -148,6 +181,30 @@ class AgentCallLogger:
                 
                 if log_id:
                     logger.info(f"Started agent call log: {log_id} for agent={agent_name}, message_id={message_id}")
+
+                    self._log_locations[log_id] = (conversation_id, message_id)
+                    self._write_log_event(conversation_id, message_id, {
+                        "event": "start",
+                        "logId": log_id,
+                        "userId": user_id,
+                        "conversationId": conversation_id,
+                        "messageId": message_id,
+                        "sessionId": session_id,
+                        "agentName": agent_name,
+                        "agentType": agent_type,
+                        "agentVersion": agent_version,
+                        "modelName": model_name,
+                        "inputMessage": input_message,
+                        "toolsEnabled": tools_enabled,
+                        "iterationNumber": iteration_number,
+                        "workflowPhase": workflow_phase,
+                        "parentCallId": parent_call_id,
+                        "taskId": task_id,
+                        "taskType": task_type,
+                        "metadata": metadata,
+                        "tags": tags
+                    })
+
                     return log_id
                 else:
                     raise Exception("Failed to get generated ID from INSERT")
@@ -235,9 +292,27 @@ class AgentCallLogger:
                     }
                 )
                 await session.commit()
-                
+
                 logger.info(f"Completed agent call log: {log_id}")
-            
+
+                conversation_id, message_id = self._log_locations.pop(log_id, (None, None))
+                if message_id:
+                    self._write_log_event(conversation_id, message_id, {
+                        "event": "complete",
+                        "logId": log_id,
+                        "outputMessage": output_message,
+                        "toolCalls": tool_calls,
+                        "toolResults": tool_results,
+                        "toolCallsDetailed": tool_calls_detailed,
+                        "promptTokens": prompt_tokens,
+                        "completionTokens": completion_tokens,
+                        "totalTokens": total_tokens,
+                        "completionScore": completion_score,
+                        "synthesisAction": synthesis_action,
+                        "gapsIdentified": gaps_identified,
+                        "metadata": metadata
+                    })
+
         except Exception as e:
             logger.error(f"Failed to complete agent call log {log_id}: {str(e)}")
     
@@ -292,9 +367,20 @@ class AgentCallLogger:
                     }
                 )
                 await session.commit()
-                
+
                 logger.error(f"Failed agent call log: {log_id} - {error}")
-            
+
+                conversation_id, message_id = self._log_locations.pop(log_id, (None, None))
+                if message_id:
+                    self._write_log_event(conversation_id, message_id, {
+                        "event": "fail",
+                        "logId": log_id,
+                        "error": error,
+                        "errorType": error_type,
+                        "stackTrace": stack_trace,
+                        "metadata": metadata
+                    })
+
         except Exception as e:
             logger.error(f"Failed to update agent call log {log_id} as failed: {str(e)}")
     
@@ -327,7 +413,15 @@ class AgentCallLogger:
                     }
                 )
                 await session.commit()
-            
+
+                conversation_id, message_id = self._log_locations.get(log_id, (None, None))
+                if message_id:
+                    self._write_log_event(conversation_id, message_id, {
+                        "event": "update_tool_calls",
+                        "logId": log_id,
+                        "toolCalls": tool_calls
+                    })
+
         except Exception as e:
             logger.error(f"Failed to update tool calls for {log_id}: {str(e)}")
     
@@ -360,7 +454,15 @@ class AgentCallLogger:
                     }
                 )
                 await session.commit()
-            
+
+                conversation_id, message_id = self._log_locations.get(log_id, (None, None))
+                if message_id:
+                    self._write_log_event(conversation_id, message_id, {
+                        "event": "update_tool_results",
+                        "logId": log_id,
+                        "toolResults": tool_results
+                    })
+
         except Exception as e:
             logger.error(f"Failed to update tool results for {log_id}: {str(e)}")
     
@@ -403,7 +505,15 @@ class AgentCallLogger:
                 )
                 await session.commit()
                 logger.debug(f"Updated detailed tool calls for {log_id}: {len(tool_calls_detailed)} records")
-            
+
+                conversation_id, message_id = self._log_locations.get(log_id, (None, None))
+                if message_id:
+                    self._write_log_event(conversation_id, message_id, {
+                        "event": "update_tool_calls_detailed",
+                        "logId": log_id,
+                        "toolCallsDetailed": tool_calls_detailed
+                    })
+
         except Exception as e:
             logger.error(f"Failed to update detailed tool calls for {log_id}: {str(e)}")
     

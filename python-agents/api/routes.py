@@ -303,6 +303,7 @@ async def process_with_workflow_orchestrator(
                 model_client=synthesizer_client,
                 redis_client=redis_client,
                 conversation_storage=conversation_storage,
+                context_manager_agent=context_manager,
                 websocket_manager=None,  # Will use notify_websocket function instead
                 max_iterations=getattr(settings, 'MAX_WORKFLOW_ITERATIONS', 3)
             )

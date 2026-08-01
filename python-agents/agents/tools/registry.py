@@ -34,108 +34,135 @@ class ToolRegistry:
         """Returns complete list of all available tools."""
         return [
             # ===== TOOL CALLS (Deterministic Operations) =====
-            
+
             ToolDefinition(
                 name="manage_tasks",
                 type="tool_call",
-                description="Create, update, search, or list tasks in the database",
+                description="Create, read, update, list, or delete the user's tasks in the database",
                 parameters={
                     "action": {
-                        "type": "string", 
-                        "enum": ["create", "update", "search", "list", "get", "delete"],
+                        "type": "string",
+                        "enum": ["create", "update", "get", "list", "delete"],
                         "required": True
                     },
                     "tasks": {
                         "type": "array",
-                        "items": "object",
-                        "description": "Array of task objects for create/update actions",
+                        "description": "For action=create: list of task objects (title required; description, priority, estimatedHours, projectId, tags, notes optional)",
                         "optional": True
                     },
                     "task_id": {
-                        "type": "string",
-                        "description": "Task ID for get/update/delete actions",
+                        "type": "integer",
+                        "description": "For action=update/get/delete: ID of the task",
                         "optional": True
                     },
-                    "filters": {
+                    "updates": {
                         "type": "object",
-                        "description": "Search filters (status, priority, project_id, etc.)",
+                        "description": "For action=update: fields to update (title, description, status, priority, estimatedHours, actualHours, projectId, dueDate, tags, ...)",
+                        "optional": True
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "For action=list: filter by status (TODO, IN_PROGRESS, REVIEW, BLOCKED, COMPLETED, CANCELLED)",
+                        "optional": True
+                    },
+                    "priority": {
+                        "type": "string",
+                        "description": "For action=list: filter by priority (LOW, MEDIUM, HIGH, URGENT)",
+                        "optional": True
+                    },
+                    "project_id": {
+                        "type": "integer",
+                        "description": "For action=list: filter by project ID",
+                        "optional": True
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "For action=list: max tasks to return (default 50, max 200)",
                         "optional": True
                     }
                 },
                 use_cases=[
-                    "User wants to create tasks",
-                    "User asks to update task status/priority",
-                    "User searches for tasks by criteria",
-                    "User wants to see all tasks"
+                    "Create production pipeline tasks for a content project",
+                    "Update a task's status or priority",
+                    "List a user's tasks, optionally filtered by project/status",
+                    "Look up a specific task by ID",
+                    "Delete a task"
                 ],
                 examples=[{
-                    "id": "task_1",
+                    "id": "task_5",
                     "type": "tool_call",
                     "tool_name": "manage_tasks",
-                    "description": "Create 3 video production tasks",
-                    "goal": "3 tasks created in database with TODO status",
+                    "description": "Create production pipeline tasks for Episode 1",
+                    "goal": "User has actionable tasks to move Ep1 from outline to publish",
                     "depends_on": [],
                     "context": {
                         "action": "create",
                         "tasks": [
-                            {"title": "Video Script", "status": "TODO", "priority": "HIGH"},
-                            {"title": "Video Recording", "status": "TODO", "priority": "MEDIUM"},
-                            {"title": "Video Editing", "status": "TODO", "priority": "MEDIUM"}
+                            {
+                                "title": "Write Episode 1 script",
+                                "description": "Draft full script for Episode 1",
+                                "priority": "HIGH",
+                                "estimatedHours": 4,
+                                "projectId": "${task_1.result.project_id}"
+                            }
                         ]
                     }
                 }]
             ),
-            
+
             ToolDefinition(
                 name="manage_projects",
                 type="tool_call",
-                description="Create, update, or list projects",
+                description="Create, read, list, or delete the user's projects in the database",
                 parameters={
                     "action": {
                         "type": "string",
-                        "enum": ["create", "update", "list", "get"],
+                        "enum": ["create", "get", "list", "delete"],
                         "required": True
                     },
                     "projects": {
                         "type": "array",
-                        "items": "object",
-                        "description": "Array of project objects for create/update",
+                        "description": "For action=create: list of project objects (name required; description, status, color, icon, tags optional)",
                         "optional": True
                     },
                     "project_id": {
-                        "type": "string",
-                        "description": "Project ID for get/update actions",
+                        "type": "integer",
+                        "description": "For action=get/delete: ID of the project",
                         "optional": True
                     },
-                    "filters": {
-                        "type": "object",
-                        "description": "Search filters for listing projects",
+                    "status": {
+                        "type": "string",
+                        "description": "For action=list: filter by status (ACTIVE, ON_HOLD, COMPLETED, ARCHIVED, CANCELLED)",
+                        "optional": True
+                    },
+                    "new_project_id": {
+                        "type": "integer",
+                        "description": "For action=delete: project ID to transfer the deleted project's tasks to. If omitted, tasks transfer to the user's default project if one exists, otherwise they're orphaned (projectId set to null)",
                         "optional": True
                     }
                 },
                 use_cases=[
-                    "User wants to organize tasks into projects",
-                    "Create new project structure",
-                    "List all projects"
+                    "Create a new project for a content series",
+                    "Look up a specific project by ID",
+                    "List a user's projects",
+                    "Delete a project, moving its tasks to another project or the default project"
                 ],
                 examples=[{
                     "id": "task_1",
                     "type": "tool_call",
                     "tool_name": "manage_projects",
-                    "description": "Create Q1 2026 video campaign project",
-                    "goal": "Project created with id returned",
+                    "description": "Create the Deccan Atlas project",
+                    "goal": "Project exists to attach tasks to",
                     "depends_on": [],
                     "context": {
                         "action": "create",
-                        "projects": [{
-                            "name": "Q1 2026 Video Campaign",
-                            "description": "YouTube content series",
-                            "status": "PLANNING"
-                        }]
+                        "projects": [
+                            {"name": "Deccan Atlas", "description": "History/travel video series"}
+                        ]
                     }
                 }]
             ),
-            
+
             ToolDefinition(
                 name="manage_context_files",
                 type="tool_call",

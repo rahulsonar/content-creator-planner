@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "task-management": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["-m", "mcp_server.task_management"],
+      "cwd": "${workspaceFolder}/python-agents",
+      "env": {
+        "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/content_planner",
+        "OPENAI_API_KEY": "unused-placeholder",
+        "INTERNAL_API_SECRET": "unused-placeholder"
+      }
+    }
+  }
+}

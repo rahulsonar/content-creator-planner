@@ -224,7 +224,13 @@ class TaskExecutor:
         try:
             if task_type == 'tool_call':
                 # Direct tool execution (no LLM)
-                result = await self._execute_tool_call(task, dependency_results, user_id)
+                result = await self._execute_tool_call(
+                    task,
+                    dependency_results,
+                    user_id,
+                    conversation_id,
+                    message_id
+                )
             elif task_type == 'agent_call':
                 # Spawn child agent with LLM reasoning
                 result = await self._execute_agent_call(
@@ -337,34 +343,40 @@ class TaskExecutor:
         self,
         task: Dict[str, Any],
         dependency_results: Dict[str, Dict[str, Any]],
-        user_id: str
+        user_id: str,
+        conversation_id: Optional[int] = None,
+        message_id: Optional[str] = None
     ) -> Any:
         """
         Execute a tool call directly (no LLM).
-        
+
         Args:
             task: Task definition with tool_name and context
             dependency_results: Results from dependencies
             user_id: User ID
-            
+            conversation_id: Conversation ID (integer), for tools that log agent calls
+            message_id: Message ID, for tools that log agent calls
+
         Returns:
             Tool execution result
         """
         tool_name = task.get('tool_name')
         context = task.get('context', {})
-        
+
         logger.info(f"[TaskExecutor] Executing tool: {tool_name}")
-        
+
         # Resolve variable references in context (e.g., ${task_1.result.project_id})
         resolved_context = self._resolve_variable_references(context, dependency_results)
-        
+
         # Route to appropriate tool
         if tool_name == 'manage_tasks':
             return await self._execute_manage_tasks(resolved_context, user_id)
         elif tool_name == 'manage_projects':
             return await self._execute_manage_projects(resolved_context, user_id)
         elif tool_name == 'manage_context_files':
-            return await self._execute_manage_context_files(resolved_context, user_id)
+            return await self._execute_manage_context_files(
+                resolved_context, user_id, conversation_id, message_id
+            )
         elif tool_name == 'redis_storage':
             return await self._execute_redis_storage(resolved_context)
         else:
@@ -408,7 +420,7 @@ Task: {task.get('description')}
 Goal: {task.get('goal')}
 
 Context:
-{json.dumps(resolved_context, indent=2)}
+{json.dumps(resolved_context, indent=2, default=str)}
 
 Expected Output: {task.get('expected_output', 'Detailed analysis or result')}
 
@@ -432,30 +444,130 @@ Provide a detailed response addressing the task requirements.
     
     # ========== Tool Execution Methods ==========
     
+    @staticmethod
+    def _coerce_id(value: Any) -> Any:
+        """
+        Cast an ID to int when possible.
+
+        Variable references like ${task_1.result.project_id} are always
+        resolved to strings (see _resolve_variable_references), but ID
+        columns in the database are integers, so numeric-looking strings
+        need to be converted back before hitting asyncpg.
+        """
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        return value
+
     async def _execute_manage_tasks(self, context: Dict, user_id: str) -> Any:
         """Execute manage_tasks tool."""
+        from utils.task_inserter import insert_tasks_to_db
+        from utils.task_updater import update_task_by_id
+        from utils.task_query import get_task_by_id, list_tasks, delete_task_by_id
+
         action = context.get('action')
         logger.info(f"[TaskExecutor] manage_tasks action: {action}")
-        
-        # Task manager agent has been removed
-        raise ValueError("TaskManager agent has been removed. Task management functionality is not available.")
-    
+
+        if action == 'create':
+            tasks = context.get('tasks', [])
+            if not tasks:
+                raise ValueError("tasks must be a non-empty list")
+            for task in tasks:
+                if 'projectId' in task:
+                    task['projectId'] = self._coerce_id(task['projectId'])
+            return await insert_tasks_to_db(tasks, user_id=user_id)
+
+        elif action == 'update':
+            task_id = self._coerce_id(context.get('task_id'))
+            updates = context.get('updates', {})
+            if not task_id:
+                raise ValueError("task_id is required")
+            if not updates:
+                raise ValueError("updates must be a non-empty object")
+            if 'projectId' in updates:
+                updates['projectId'] = self._coerce_id(updates['projectId'])
+            updated = await update_task_by_id(task_id, updates, user_id=user_id)
+            return {"success": updated, "task_id": task_id, "updated": updated}
+
+        elif action == 'get':
+            task_id = self._coerce_id(context.get('task_id'))
+            if not task_id:
+                raise ValueError("task_id is required")
+            return await get_task_by_id(task_id=task_id, user_id=user_id)
+
+        elif action == 'list':
+            return await list_tasks(
+                user_id=user_id,
+                status=context.get('status'),
+                priority=context.get('priority'),
+                project_id=self._coerce_id(context.get('project_id')),
+                limit=context.get('limit', 50),
+            )
+
+        elif action == 'delete':
+            task_id = self._coerce_id(context.get('task_id'))
+            if not task_id:
+                raise ValueError("task_id is required")
+            return await delete_task_by_id(task_id=task_id, user_id=user_id)
+
+        else:
+            raise ValueError(f"Unknown manage_tasks action: {action}")
+
     async def _execute_manage_projects(self, context: Dict, user_id: str) -> Any:
         """Execute manage_projects tool."""
+        from utils.project_manager import (
+            insert_projects_to_db,
+            get_project_by_id,
+            list_projects,
+            delete_project_by_id,
+        )
+
         action = context.get('action')
-        
-        # Task manager agent has been removed
-        raise ValueError("TaskManager agent has been removed. Project management functionality is not available.")
+        logger.info(f"[TaskExecutor] manage_projects action: {action}")
+
+        if action == 'create':
+            projects = context.get('projects', [])
+            if not projects:
+                raise ValueError("projects must be a non-empty list")
+            return await insert_projects_to_db(projects, user_id=user_id)
+
+        elif action == 'get':
+            project_id = self._coerce_id(context.get('project_id'))
+            if not project_id:
+                raise ValueError("project_id is required")
+            return await get_project_by_id(project_id=project_id, user_id=user_id)
+
+        elif action == 'list':
+            return await list_projects(user_id=user_id, status_filter=context.get('status', ''))
+
+        elif action == 'delete':
+            project_id = self._coerce_id(context.get('project_id'))
+            if not project_id:
+                raise ValueError("project_id is required")
+            new_project_id = self._coerce_id(context.get('new_project_id'))
+            return await delete_project_by_id(
+                project_id=project_id,
+                user_id=user_id,
+                new_project_id=new_project_id,
+            )
+
+        else:
+            raise ValueError(f"Unknown manage_projects action: {action}")
     
-    async def _execute_manage_context_files(self, context: Dict, user_id: str) -> Any:
+    async def _execute_manage_context_files(
+        self,
+        context: Dict,
+        user_id: str,
+        conversation_id: Optional[int] = None,
+        message_id: Optional[str] = None
+    ) -> Any:
         """Execute manage_context_files tool."""
         if not self.context_manager_agent:
             raise ValueError("ContextManager agent not configured")
-        
+
         action = context.get('action')
         filename = context.get('filename')
         content = context.get('content')
-        
+
         if action == 'read':
             request = f"Read context file: {filename}"
         elif action == 'write':
@@ -466,12 +578,16 @@ Provide a detailed response addressing the task requirements.
             request = "List all context files"
         else:
             request = f"Manage context: {action} - {json.dumps(context)}"
-        
+
         result = await self.context_manager_agent.process_message(
             user_message=request,
-            user_context={'user_id': user_id}
+            user_context={
+                'user_id': user_id,
+                'conversation_id': conversation_id,
+                'message_id': message_id
+            }
         )
-        
+
         return result
     
     async def _execute_redis_storage(self, context: Dict) -> Any:

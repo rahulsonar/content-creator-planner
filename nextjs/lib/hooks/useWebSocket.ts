@@ -152,7 +152,9 @@ export function useWebSocket({
 
           case 'message':
             // Only process if it's for our conversation
-            if (data.conversationId === conversationId) {
+            // (conversationId may arrive as a number from the Python backend
+            // while the client always holds it as a string from the route params)
+            if (String(data.conversationId) === String(conversationId)) {
               console.log('[WS Hook] Received message for our conversation');
               setIsProcessing(false);
               onStatusChange?.('connected');

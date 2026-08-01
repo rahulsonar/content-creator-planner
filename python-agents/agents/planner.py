@@ -265,7 +265,7 @@ Your response MUST be pure JSON (no markdown code blocks):
 
 IMPORTANT DISTINCTIONS:
 - **Agent tasks** (in your plans): Saved in Redis, executed by TaskExecutor. Reference the tools above.
-- **User tasks** (via manage_tasks tool): User's actual content projects, saved in database via API.
+- **User tasks**: User's actual content projects, saved in the database. Manage them via the manage_tasks and manage_projects tools (see tool definitions above).
 
 You CANNOT execute agent tasks. Only create task plans that will be executed by the orchestrator.
 Return raw JSON only - no code blocks, no markdown wrapping.

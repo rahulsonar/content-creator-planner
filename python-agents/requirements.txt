@@ -19,6 +19,9 @@ pydantic-settings==2.1.0
 # HTTP client
 httpx==0.26.0
 
+# MCP (Model Context Protocol) server
+mcp==1.25.0
+
 # Redis
 redis==5.0.1
 

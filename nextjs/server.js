@@ -8,6 +8,16 @@ const { parse } = require('url');
 const next = require('next');
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
+const { PrismaClient } = require('@prisma/client');
+const { PrismaPg } = require('@prisma/adapter-pg');
+const { Pool } = require('pg');
+
+// The schema's datasource has no `url`, so PrismaClient must always be
+// constructed with a driver adapter (see lib/prisma.ts) - `new PrismaClient()`
+// with no options throws PrismaClientInitializationError.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter });
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0'; // Listen on all interfaces in Docker
@@ -32,6 +42,7 @@ const wsConnections = new Map(); // conversationId -> Set<WebSocket>
 const processingConversations = new Set(); // Track conversations with ongoing agent processing
 
 async function addConnection(conversationId, ws, userId) {
+  conversationId = String(conversationId);
   if (!wsConnections.has(conversationId)) {
     wsConnections.set(conversationId, new Set());
   }
@@ -41,18 +52,13 @@ async function addConnection(conversationId, ws, userId) {
   // BUGFIX: Check actual database for IN_PROGRESS logs, not just in-memory state
   // The in-memory Set can get out of sync after server restarts or crashes
   try {
-    const { PrismaClient } = require('@prisma/client');
-    const prisma = new PrismaClient();
-    
     const inProgressCount = await prisma.agentCallLog.count({
       where: {
         conversationId: parseInt(conversationId),
         status: 'IN_PROGRESS'
       }
     });
-    
-    await prisma.$disconnect();
-    
+
     if (inProgressCount > 0) {
       console.log(`[WS Server] Found ${inProgressCount} IN_PROGRESS logs for conversation ${conversationId}`);
       processingConversations.add(conversationId);
@@ -73,6 +79,7 @@ async function addConnection(conversationId, ws, userId) {
 }
 
 function removeConnection(conversationId, ws) {
+  conversationId = String(conversationId);
   const connections = wsConnections.get(conversationId);
   if (connections) {
     const toRemove = Array.from(connections).find((conn) => conn.ws === ws);
@@ -86,6 +93,7 @@ function removeConnection(conversationId, ws) {
 }
 
 function broadcast(conversationId, message) {
+  conversationId = String(conversationId);
   const connections = wsConnections.get(conversationId);
   if (!connections) return;
 
