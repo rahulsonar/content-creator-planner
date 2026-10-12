@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { getJwtSecret } from '@/lib/auth/secrets';
 
 // Force Node.js runtime for middleware
 export const runtime = 'nodejs';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -39,7 +38,7 @@ export function middleware(request: NextRequest) {
   try {
     // Verify token - dynamic import to ensure it works in Node runtime
     const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: number; email: string; name?: string };
+    const decoded = jwt.verify(token, getJwtSecret()) as { userId: number; email: string; name?: string };
     
     // Create a new response with the user info in headers
     const response = NextResponse.next();

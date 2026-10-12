@@ -4,14 +4,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getInternalApiSecret } from '@/lib/auth/secrets';
 
-const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET || 'dev-secret-change-in-production';
 
 export async function POST(request: NextRequest) {
   try {
     // Verify internal secret
     const secret = request.headers.get('X-Internal-Secret');
-    if (secret !== INTERNAL_API_SECRET) {
+    if (secret !== getInternalApiSecret()) {
       console.error('[Webhook] Unauthorized webhook attempt');
       return NextResponse.json(
         { error: 'Unauthorized' },

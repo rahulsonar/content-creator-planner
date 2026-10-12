@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyToken } from '@/lib/auth/helpers';
 import { prisma } from '@/lib/prisma';
+import { getInternalApiSecret } from '@/lib/auth/secrets';
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://python-agents:8000';
 
@@ -59,7 +60,7 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'application/json',
         'X-User-ID': userId !== null ? userId.toString() : '',
         'X-User-Name': userName || '',
-        'X-Internal-Secret': process.env.INTERNAL_API_SECRET || 'dev-secret-change-in-production',
+        'X-Internal-Secret': getInternalApiSecret(),
       },
       body: JSON.stringify({
         message: message,

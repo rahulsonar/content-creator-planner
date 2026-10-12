@@ -53,6 +53,7 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_planner
       - NODE_ENV=development
       - WATCHPACK_POLLING=true
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-default-internal-secret-change-me}
       - ENABLE_OPENAI_TOOLS=${ENABLE_OPENAI_TOOLS:-true}
     volumes:
