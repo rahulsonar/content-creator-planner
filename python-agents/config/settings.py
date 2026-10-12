@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     
     # Service Authentication
     INTERNAL_API_SECRET: str
+    JWT_SECRET: str = ""  # Unused here; JWTs are issued and verified by the Next.js app
     
     # Environment
     ENVIRONMENT: str = "development"
