@@ -30,7 +30,7 @@ router = APIRouter()
 
 # Webhook configuration
 NEXTJS_WEBHOOK_URL = settings.NEXTJS_WEBHOOK_URL if hasattr(settings, 'NEXTJS_WEBHOOK_URL') else "http://app:3000/api/chat/webhook"
-INTERNAL_API_SECRET = settings.INTERNAL_API_SECRET if hasattr(settings, 'INTERNAL_API_SECRET') else "dev-secret-change-in-production"
+INTERNAL_API_SECRET = settings.INTERNAL_API_SECRET
 
 
 async def _handle_dummy_chat(

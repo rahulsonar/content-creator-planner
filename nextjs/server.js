@@ -22,7 +22,15 @@ const prisma = new PrismaClient({ adapter });
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '0.0.0.0'; // Listen on all interfaces in Docker
 const port = parseInt(process.env.PORT || '3000', 10);
+
+// Refuse to start in production with the dev-only secret fallbacks
+if (!dev) {
+  for (const name of ['JWT_SECRET', 'INTERNAL_API_SECRET']) {
+    if (!process.env[name]) throw new Error(`${name} must be set in production`);
+  }
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET || 'dev-secret-change-in-production';
 
 const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
@@ -239,7 +247,7 @@ app.prepare().then(() => {
               headers: {
                 'Content-Type': 'application/json',
                 'X-User-ID': userId,
-                'X-Internal-Secret': process.env.INTERNAL_API_SECRET || 'dev-secret-change-in-production',
+                'X-Internal-Secret': INTERNAL_API_SECRET,
               },
               body: JSON.stringify({
                 message: message.content,
