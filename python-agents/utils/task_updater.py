@@ -3,7 +3,7 @@ Task Updater Utility
 Update tasks in PostgreSQL database by ID, with support for batch updates
 """
 import asyncpg
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
 from utils.logger import logger
 

@@ -20,7 +20,6 @@ import argparse
 sys.path.insert(0, '/var/www/html/content-creator-planner/python-agents')
 
 from storage.agent_call_log import agent_call_logger
-from utils.logger import logger
 
 
 def format_duration(ms: Optional[int]) -> str:

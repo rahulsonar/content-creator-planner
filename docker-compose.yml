@@ -54,7 +54,6 @@ services:
       - NODE_ENV=development
       - WATCHPACK_POLLING=true
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-default-internal-secret-change-me}
-      - ENABLE_OPENAI_TOOLS=${ENABLE_OPENAI_TOOLS:-true}
     volumes:
       - ./nextjs:/app
       - node_modules:/app/node_modules
@@ -76,17 +75,16 @@ services:
     environment:
       - TZ=Asia/Kolkata
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/content_planner
-      - REDIS_URL=redis://redis:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-default-internal-secret-change-me}
-      - ENABLE_OPENAI_TOOLS=${ENABLE_OPENAI_TOOLS:-true}
       - USE_DUMMY_AI=${USE_DUMMY_AI:-false}
-      - USE_WORKFLOW_ORCHESTRATOR=${USE_WORKFLOW_ORCHESTRATOR:-false}
-      - MAX_WORKFLOW_ITERATIONS=${MAX_WORKFLOW_ITERATIONS:-3}
-      - PLANNER_MODEL=${PLANNER_MODEL:-gpt-4}
-      - CONTEXT_MANAGER_MODEL=${CONTEXT_MANAGER_MODEL:-gpt-4}
+      - PLANNER_AGENT_MODEL=${PLANNER_AGENT_MODEL:-claude-opus-5-5}
+      - PLANNER_AGENT_MAX_STEPS=${PLANNER_AGENT_MAX_STEPS:-15}
+      - ANTHROPIC_DEFAULT_MODEL=${ANTHROPIC_DEFAULT_MODEL:-claude-opus-5-5}
+      - ANTHROPIC_EFFORT=${ANTHROPIC_EFFORT:-medium}
+      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-16000}
+      - ANTHROPIC_REFUSAL_FALLBACK=${ANTHROPIC_REFUSAL_FALLBACK:-true}
 
     volumes:
       - ./python-agents:/app

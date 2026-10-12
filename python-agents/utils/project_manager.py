@@ -4,7 +4,7 @@ Simple function to insert projects into PostgreSQL database
 """
 import asyncpg
 from typing import List, Dict, Any
-from datetime import datetime, date
+from datetime import datetime
 from utils.logger import logger
 
 

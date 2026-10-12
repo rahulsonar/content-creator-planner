@@ -95,10 +95,6 @@ class ConversationStorage:
                     message["tokens"] = tokens_used
                 
                 # Append message to the messages JSON array
-                # Cast the parameter as JSONB using SQLAlchemy's cast function
-                from sqlalchemy import cast
-                from sqlalchemy.dialects.postgresql import JSONB
-                
                 query = text("""
                     UPDATE "Conversation"
                     SET messages = messages || CAST(:message_json AS jsonb),

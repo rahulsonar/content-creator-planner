@@ -3,9 +3,9 @@ Agent Call Log Storage
 Comprehensive logging for all agent interactions
 
 Writes to both the "AgentCallLog" table and a mirrored file under
-AGENT_CALL_LOG_PATH/<conversationId>/<messageId>.log (JSON Lines, one
-event per start/update/complete/fail call) so calls can be traced
-without querying the database.
+AGENT_CALL_LOG_PATH/<conversationId>/<messageId>.log (standard, one
+line of plain text per start/update/complete/fail call) so calls can
+be traced without querying the database.
 """
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
@@ -30,24 +30,41 @@ class AgentCallLogger:
         # calls (which only receive log_id) know which file to append to
         self._log_locations: Dict[int, tuple] = {}
 
+    def _format_log_field(self, value: Any) -> str:
+        """Render a single field value for a logfmt-style log line"""
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, default=str)
+        if isinstance(value, str) and (" " in value or "=" in value or "\n" in value):
+            return json.dumps(value)
+        return str(value)
+
+    def _format_log_line(self, event: Dict[str, Any]) -> str:
+        """Format an event as a standard single-line log entry: 'TIMESTAMP - EVENT - key=value ...'"""
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S") + f",{now.microsecond // 1000:03d}"
+        event_name = str(event.get("event", "event")).upper()
+
+        fields = " ".join(
+            f"{key}={self._format_log_field(value)}"
+            for key, value in event.items()
+            if key != "event" and value is not None
+        )
+        return f"{timestamp} - {event_name} - {fields}" if fields else f"{timestamp} - {event_name}"
+
     def _write_log_event(
         self,
         conversation_id: Optional[int],
         message_id: str,
         event: Dict[str, Any]
     ):
-        """Append a JSON-line event to conversationId/messageId.log"""
+        """Append a standard log line to conversationId/messageId.log"""
         try:
             conversation_dir = self.log_dir / (str(conversation_id) if conversation_id is not None else "no_conversation")
             conversation_dir.mkdir(parents=True, exist_ok=True)
             log_file = conversation_dir / f"{message_id}.log"
 
-            event_with_timestamp = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                **event
-            }
             with open(log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(event_with_timestamp, default=str) + "\n")
+                f.write(self._format_log_line(event) + "\n")
         except Exception as e:
             logger.error(f"Failed to write agent call log file for message {message_id}: {str(e)}")
 
